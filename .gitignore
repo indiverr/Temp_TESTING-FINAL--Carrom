@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+lottery-app/node_modules/
+
+# Build outputs
+dist/
+build/
+lottery-app/dist/
+functions/lib/
+
+# Local Environment & Secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+*serviceAccount*.json
+*credential*.json
+*.pem
+*.key
+
+# Firebase / Emulator logs & caches
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+hub-debug.log*
+*.log
+
+# Third-party / Unrelated workspace folders
+iqoo/
+.netlify/
+
+# System files
+.DS_Store
+Thumbs.db

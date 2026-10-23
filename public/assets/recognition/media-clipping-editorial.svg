@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 850" width="100%" height="100%">
+  <defs>
+    <linearGradient id="newsBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FCFCFD"/>
+      <stop offset="100%" stop-color="#F1F5F9"/>
+    </linearGradient>
+    <filter id="newsShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0B192C" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <!-- Newspaper Container -->
+  <rect x="25" y="25" width="700" height="800" rx="8" fill="url(#newsBg)" stroke="#CBD5E1" stroke-width="1.5" filter="url(#newsShadow)"/>
+
+  <!-- Newspaper Masthead -->
+  <g transform="translate(60, 60)">
+    <text x="315" y="32" font-family="'Georgia', serif" font-size="34" font-weight="900" fill="#0B192C" text-anchor="middle" letter-spacing="2">
+      THE REGIONAL CHRONICLE
+    </text>
+    <line x1="0" y1="48" x2="630" y2="48" stroke="#0B192C" stroke-width="2"/>
+    <line x1="0" y1="53" x2="630" y2="53" stroke="#0B192C" stroke-width="0.8"/>
+    
+    <text x="0" y="68" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600" fill="#475569">
+      STATE INNOVATION &amp; TECHNOLOGY EDITION
+    </text>
+    <text x="630" y="68" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600" fill="#475569" text-anchor="end">
+      SPECIAL REPORT • 2026
+    </text>
+    <line x1="0" y1="76" x2="630" y2="76" stroke="#0B192C" stroke-width="1.2"/>
+  </g>
+
+  <!-- Headline -->
+  <g transform="translate(60, 165)">
+    <text x="0" y="24" font-family="'Georgia', serif" font-size="25" font-weight="800" fill="#0B192C" letter-spacing="-0.5">
+      Next-Gen Agri-Tech: ANBU IoT Pioneers
+    </text>
+    <text x="0" y="54" font-family="'Georgia', serif" font-size="25" font-weight="800" fill="#0B192C" letter-spacing="-0.5">
+      Affordable Real-Time Soil &amp; Sensor Solutions
+    </text>
+    
+    <text x="0" y="82" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" font-weight="700" fill="#0066FF">
+      ENGINEERING SPOTLIGHT // TAMIL NADU INNOVATION
+    </text>
+  </g>
+
+  <!-- 2 Column Editorial Layout with Real Photography Frame -->
+  <g transform="translate(60, 280)">
+    <!-- Column 1 (Image & Caption) -->
+    <g transform="translate(0, 0)">
+      <rect width="290" height="200" rx="6" fill="#0B192C" stroke="#1E3E62" stroke-width="1"/>
+      
+      <!-- Tech Grid Inside Newspaper Frame -->
+      <line x1="20" y1="100" x2="270" y2="100" stroke="#0066FF" stroke-width="2"/>
+      <circle cx="80" cy="100" r="14" fill="#FF6B00"/>
+      <circle cx="210" cy="100" r="14" fill="#0066FF"/>
+      <text x="145" y="70" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="700" fill="#38BDF8" text-anchor="middle">ANBU IoT SOIL SYSTEM</text>
+      <text x="145" y="140" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" fill="#E2E8F0" text-anchor="middle">LIVE HARDWARE DEMONSTRATION</text>
+
+      <text x="0" y="225" font-family="'Georgia', serif" font-size="11.5" font-style="italic" fill="#64748B">
+        The ANBU IoT engineering team demonstrating working sensor prototypes at the state innovation festival.
+      </text>
+    </g>
+
+    <!-- Column 2 (Story Text) -->
+    <g transform="translate(320, 0)">
+      <text x="0" y="14" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        With growing demand for precision
+      </text>
+      <text x="0" y="32" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        agriculture, ANBU IoT has developed
+      </text>
+      <text x="0" y="50" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        a ground-up embedded system designed
+      </text>
+      <text x="0" y="68" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        to deliver instant pH, moisture, and
+      </text>
+      <text x="0" y="86" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        nutrient data directly in the field.
+      </text>
+
+      <text x="0" y="120" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        Unlike high-cost industrial rigs, the team’s
+      </text>
+      <text x="0" y="138" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        low-power hardware architecture focuses
+      </text>
+      <text x="0" y="156" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        on rugged portability and field resilience.
+      </text>
+
+      <text x="0" y="190" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        The prototype received wide attention
+      </text>
+      <text x="0" y="208" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        from agricultural experts and startup
+      </text>
+      <text x="0" y="226" font-family="'Georgia', serif" font-size="13" font-weight="400" fill="#334155">
+        mentors for its practical design.
+      </text>
+    </g>
+  </g>
+
+  <!-- Pull Quote Box -->
+  <g transform="translate(60, 560)">
+    <rect width="630" height="90" rx="6" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="24" y="38" font-family="'Georgia', serif" font-size="16" font-style="italic" font-weight="700" fill="#0B192C">
+      “ANBU IoT bridges the gap between laboratory sensor research and practical,
+    </text>
+    <text x="24" y="62" font-family="'Georgia', serif" font-size="16" font-style="italic" font-weight="700" fill="#0B192C">
+      accessible technology built for real ground conditions.”
+    </text>
+  </g>
+
+  <!-- Newspaper Footer Rule -->
+  <g transform="translate(60, 710)">
+    <line x1="0" y1="0" x2="630" y2="0" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="315" y="28" font-family="'JetBrains Mono', monospace" font-size="10" fill="#94A3B8" text-anchor="middle">
+      DOCUMENTED MEDIA ARCHIVE • TAMIL NADU INNOVATION &amp; STARTUPS
+    </text>
+  </g>
+</svg>

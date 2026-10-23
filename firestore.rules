@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper authorization functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return request.auth.token.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+    
+    function isPaidEmployee() {
+      return isAuthenticated() && (getUserRole() == 'paid_employee' || getUserRole() == 'admin');
+    }
+    
+    function isEmployee() {
+      return isAuthenticated() && (getUserRole() == 'employee' || getUserRole() == 'paid_employee' || getUserRole() == 'admin');
+    }
+
+    // 1. System Configuration: Read by authenticated users; update by Admin only
+    match /config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // 2. User Profiles & Role Records: Read own profile or Admin; write by Admin only
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // 3. Deterministic Ticket Reservations: /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber}
+    match /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber} {
+      allow read: if isAuthenticated();
+      // Only authenticated employees can reserve available tickets
+      allow create: if isEmployee() 
+        && request.resource.data.ticketNumber == ticketNumber
+        && request.resource.data.drawDate == drawDate
+        && request.resource.data.bookingStatus == 'Booked';
+      // Tickets can never be directly updated or deleted by clients; cancellations route via Cloud Functions/Admin
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // 4. Bookings Collection
+    match /bookings/{bookingId} {
+      allow read: if isAuthenticated();
+      allow create: if isEmployee() 
+        && request.resource.data.bookingStatus == 'Booked'
+        && request.resource.data.paymentStatus == 'Unpaid';
+      // Financial balance updates permitted only for Paid Employee or Admin with ledger validation
+      allow update: if isPaidEmployee()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['amountPaid', 'remainingBalance', 'paymentStatus', 'paymentRef', 'paidBy', 'paidAt', 'history'])
+        && request.resource.data.amountPaid <= resource.data.totalAmount
+        && request.resource.data.remainingBalance == resource.data.totalAmount - request.resource.data.amountPaid;
+      allow delete: if false;
+    }
+
+    // 5. Append-Only Payments Collection
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated();
+      // Only Paid Employee or Admin can record payments
+      allow create: if isPaidEmployee()
+        && request.resource.data.amount > 0
+        && request.resource.data.paymentStatus in ['Partial', 'Paid'];
+      // Financial history is strictly immutable: no client edits or deletes allowed
+      allow update, delete: if false;
+    }
+
+    // 6. Append-Only Audit Trail Collection
+    match /auditEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // 7. Today Winner Records
+    match /winners/{winnerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // 8. Result Papers
+    match /resultPapers/{paperId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

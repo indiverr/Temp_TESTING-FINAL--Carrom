@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="agriBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#071E1C"/>
+      <stop offset="50%" stop-color="#0B192C"/>
+      <stop offset="100%" stop-color="#06121E"/>
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="waterFlow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0066FF"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <pattern id="agriGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#10B981" stroke-width="0.6" opacity="0.15"/>
+    </pattern>
+  </defs>
+
+  <rect width="800" height="500" rx="16" fill="url(#agriBg)"/>
+  <rect width="800" height="500" rx="16" fill="url(#agriGrid)"/>
+
+  <!-- Top Status Badge -->
+  <g transform="translate(40, 30)">
+    <rect width="320" height="34" rx="8" fill="#0E2D27" stroke="#10B981" stroke-width="1"/>
+    <circle cx="18" cy="17" r="5" fill="#10B981"/>
+    <text x="32" y="22" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="600" fill="#34D399" letter-spacing="1">
+      ANBU-IOT // SMART-AGRI-CHAMBER
+    </text>
+  </g>
+
+  <!-- Left: Growth Chamber & Automated Irrigation Schematic -->
+  <g transform="translate(40, 85)">
+    <rect width="400" height="375" rx="12" fill="#0A1C24" stroke="#1E3E62" stroke-width="1.5"/>
+    
+    <text x="24" y="36" font-family="'Plus Jakarta Sans', sans-serif" font-size="18" font-weight="700" fill="#FFFFFF">
+      Controlled Microgreens Chamber
+    </text>
+    <text x="24" y="56" font-family="'JetBrains Mono', monospace" font-size="11" fill="#94A3B8">
+      CLOSED-LOOP WATER DELIVERY & CLIMATE CONTROL
+    </text>
+
+    <!-- Cultivation Tray 1 (Top Tier) -->
+    <g transform="translate(24, 75)">
+      <rect width="352" height="90" rx="8" fill="#06151B" stroke="#10B981" stroke-width="1.2"/>
+      
+      <!-- Microgreen Shoots (Vector Sproutlings) -->
+      <g transform="translate(20, 50)">
+        <!-- Multiple sprouts -->
+        <path d="M 10 25 Q 15 5 22 2 Q 28 2 24 25" fill="url(#leafGrad)"/>
+        <path d="M 40 25 Q 45 3 53 0 Q 60 2 54 25" fill="url(#leafGrad)"/>
+        <path d="M 70 25 Q 75 8 82 4 Q 90 6 86 25" fill="url(#leafGrad)"/>
+        <path d="M 105 25 Q 112 2 120 1 Q 128 5 122 25" fill="url(#leafGrad)"/>
+        <path d="M 140 25 Q 146 6 154 3 Q 162 6 158 25" fill="url(#leafGrad)"/>
+        <path d="M 175 25 Q 182 3 190 2 Q 198 7 192 25" fill="url(#leafGrad)"/>
+        <path d="M 210 25 Q 216 5 224 1 Q 232 5 228 25" fill="url(#leafGrad)"/>
+        <path d="M 245 25 Q 252 2 260 3 Q 268 8 262 25" fill="url(#leafGrad)"/>
+        <path d="M 280 25 Q 286 4 294 1 Q 302 6 298 25" fill="url(#leafGrad)"/>
+      </g>
+
+      <!-- Soil Substrate Bed -->
+      <rect x="10" y="70" width="332" height="12" rx="3" fill="#3E2723" opacity="0.8"/>
+      
+      <!-- Moisture Sensor Probe inserted -->
+      <line x1="60" y1="35" x2="60" y2="76" stroke="#FF6B00" stroke-width="3"/>
+      <circle cx="60" cy="35" r="4" fill="#FF6B00"/>
+
+      <line x1="260" y1="35" x2="260" y2="76" stroke="#FF6B00" stroke-width="3"/>
+      <circle cx="260" cy="35" r="4" fill="#FF6B00"/>
+
+      <!-- Water Tubing Line with Drip Emitters -->
+      <path d="M 10 20 L 340 20" stroke="url(#waterFlow)" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="50" cy="28" r="2.5" fill="#38BDF8"/>
+      <circle cx="120" cy="28" r="2.5" fill="#38BDF8"/>
+      <circle cx="190" cy="28" r="2.5" fill="#38BDF8"/>
+      <circle cx="260" cy="28" r="2.5" fill="#38BDF8"/>
+      <circle cx="320" cy="28" r="2.5" fill="#38BDF8"/>
+    </g>
+
+    <!-- Cultivation Tray 2 (Bottom Tier) -->
+    <g transform="translate(24, 180)">
+      <rect width="352" height="90" rx="8" fill="#06151B" stroke="#10B981" stroke-width="1.2"/>
+      
+      <!-- Microgreen Shoots Tier 2 -->
+      <g transform="translate(20, 50)">
+        <path d="M 15 25 Q 20 8 28 4 Q 35 6 30 25" fill="url(#leafGrad)"/>
+        <path d="M 50 25 Q 56 4 64 2 Q 72 6 66 25" fill="url(#leafGrad)"/>
+        <path d="M 85 25 Q 92 6 100 3 Q 108 8 102 25" fill="url(#leafGrad)"/>
+        <path d="M 125 25 Q 132 2 140 1 Q 148 5 142 25" fill="url(#leafGrad)"/>
+        <path d="M 165 25 Q 172 7 180 3 Q 188 7 184 25" fill="url(#leafGrad)"/>
+        <path d="M 205 25 Q 212 3 220 2 Q 228 7 222 25" fill="url(#leafGrad)"/>
+        <path d="M 245 25 Q 252 5 260 2 Q 268 7 264 25" fill="url(#leafGrad)"/>
+        <path d="M 285 25 Q 292 2 300 4 Q 308 9 302 25" fill="url(#leafGrad)"/>
+      </g>
+      <rect x="10" y="70" width="332" height="12" rx="3" fill="#3E2723" opacity="0.8"/>
+      <path d="M 10 20 L 340 20" stroke="url(#waterFlow)" stroke-width="4" stroke-linecap="round"/>
+    </g>
+
+    <!-- Actuator & Pump Status -->
+    <g transform="translate(24, 285)">
+      <rect width="352" height="70" rx="8" fill="#07131F" stroke="#0066FF" stroke-width="1"/>
+      <text x="16" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" font-weight="600" fill="#94A3B8">Automated Submersible Pump & Valve Control</text>
+      <text x="16" y="48" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="700" fill="#38BDF8">PUMP: CYCLING (45s/4hr) • SOIL RH: 74%</text>
+    </g>
+  </g>
+
+  <!-- Right: Control Module & Telemetry Nodes -->
+  <g transform="translate(465, 85)">
+    <rect width="295" height="375" rx="12" fill="#0B192C" stroke="#1E3E62" stroke-width="1.5"/>
+
+    <text x="24" y="36" font-family="'Plus Jakarta Sans', sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">
+      IoT Automation Engine
+    </text>
+    <text x="24" y="54" font-family="'JetBrains Mono', monospace" font-size="10" fill="#64748B">
+      NODE PROTOCOL & SENSOR BUS
+    </text>
+
+    <!-- Temperature Card -->
+    <g transform="translate(24, 75)">
+      <rect width="247" height="65" rx="8" fill="#070F1E" stroke="#1E3E62" stroke-width="1"/>
+      <text x="16" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600" fill="#94A3B8">Ambient Temperature</text>
+      <text x="16" y="50" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="700" fill="#FF6B00">24.6 <tspan font-size="13" font-weight="400" fill="#64748B">°C</tspan></text>
+      <circle cx="215" cy="32" r="14" fill="#FF6B00" opacity="0.15"/>
+      <text x="215" y="37" font-family="'JetBrains Mono', monospace" font-size="12" fill="#FF6B00" text-anchor="middle">TEMP</text>
+    </g>
+
+    <!-- Relative Humidity Card -->
+    <g transform="translate(24, 150)">
+      <rect width="247" height="65" rx="8" fill="#070F1E" stroke="#1E3E62" stroke-width="1"/>
+      <text x="16" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600" fill="#94A3B8">Chamber Humidity</text>
+      <text x="16" y="50" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="700" fill="#38BDF8">68.2 <tspan font-size="13" font-weight="400" fill="#64748B">% RH</tspan></text>
+      <circle cx="215" cy="32" r="14" fill="#0066FF" opacity="0.15"/>
+      <text x="215" y="37" font-family="'JetBrains Mono', monospace" font-size="12" fill="#38BDF8" text-anchor="middle">HUM</text>
+    </g>
+
+    <!-- Light Photoperiod Schedule -->
+    <g transform="translate(24, 225)">
+      <rect width="247" height="65" rx="8" fill="#070F1E" stroke="#1E3E62" stroke-width="1"/>
+      <text x="16" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600" fill="#94A3B8">Growth Light Photoperiod</text>
+      <text x="16" y="50" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="700" fill="#10B981">16h ON / 8h OFF</text>
+    </g>
+
+    <!-- Edge MCU Node summary -->
+    <g transform="translate(24, 300)">
+      <rect width="247" height="55" rx="8" fill="#0F2438" stroke="#0066FF" stroke-width="1"/>
+      <text x="12" y="22" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="600" fill="#FFFFFF">MICRO-CONTROLLER CORE</text>
+      <text x="12" y="42" font-family="'JetBrains Mono', monospace" font-size="10" fill="#34D399">✓ AUTONOMOUS SCHEDULER</text>
+    </g>
+  </g>
+</svg>

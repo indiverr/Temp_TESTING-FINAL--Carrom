@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 850" width="100%" height="100%">
+  <defs>
+    <linearGradient id="plaqueBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1322"/>
+      <stop offset="50%" stop-color="#14213d"/>
+      <stop offset="100%" stop-color="#070B14"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="30%" stop-color="#FCD34D"/>
+      <stop offset="70%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="silverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E2E8F0"/>
+      <stop offset="50%" stop-color="#94A3B8"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+    <filter id="awardGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#F59E0B" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Wood / Acrylic Frame -->
+  <rect x="20" y="20" width="660" height="810" rx="20" fill="url(#plaqueBg)" stroke="url(#goldGrad)" stroke-width="4" filter="url(#awardGlow)"/>
+  
+  <!-- Inner Border Inset -->
+  <rect x="40" y="40" width="620" height="770" rx="12" fill="#0A111F" stroke="#1E3E62" stroke-width="1.5"/>
+  <rect x="48" y="48" width="604" height="754" rx="8" fill="none" stroke="url(#goldGrad)" stroke-width="1" opacity="0.6"/>
+
+  <!-- Corner Ornamental Accents -->
+  <path d="M 55 75 L 75 55 M 55 55 L 75 75" stroke="url(#goldGrad)" stroke-width="2"/>
+  <path d="M 645 75 L 625 55 M 645 55 L 625 75" stroke="url(#goldGrad)" stroke-width="2"/>
+  <path d="M 55 775 L 75 795 M 55 795 L 75 775" stroke="url(#goldGrad)" stroke-width="2"/>
+  <path d="M 645 775 L 625 795 M 645 795 L 625 775" stroke="url(#goldGrad)" stroke-width="2"/>
+
+  <!-- Emblem / Laurel Wreath -->
+  <g transform="translate(350, 160)">
+    <!-- Laurel Wreath -->
+    <path d="M -70 0 C -70 -50 0 -70 0 -70 C 0 -70 70 -50 70 0 C 70 50 20 70 0 70 C -20 70 -70 50 -70 0" fill="none" stroke="url(#goldGrad)" stroke-width="3" stroke-dasharray="6 6"/>
+    
+    <!-- Medal Center Badge -->
+    <circle cx="0" cy="0" r="46" fill="url(#goldGrad)" filter="url(#awardGlow)"/>
+    <circle cx="0" cy="0" r="40" fill="#0B1322"/>
+    
+    <!-- Big "2nd" Text -->
+    <text x="0" y="8" font-family="'Plus Jakarta Sans', sans-serif" font-size="28" font-weight="800" fill="url(#goldGrad)" text-anchor="middle">
+      2nd
+    </text>
+    <text x="0" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="10" font-weight="700" fill="#94A3B8" text-anchor="middle" letter-spacing="1.5">
+      PLACE
+    </text>
+  </g>
+
+  <!-- Award Typography Structure -->
+  <!-- Event Title -->
+  <text x="350" y="280" font-family="'Plus Jakarta Sans', sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" text-anchor="middle" letter-spacing="1.2">
+    DINDIGUL SCIENCE, TECHNOLOGY &amp;
+  </text>
+  <text x="350" y="312" font-family="'Plus Jakarta Sans', sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" text-anchor="middle" letter-spacing="1.2">
+    STARTUPS FEST – 2026
+  </text>
+
+  <!-- Accent Divider Line -->
+  <line x1="200" y1="340" x2="500" y2="340" stroke="url(#goldGrad)" stroke-width="2"/>
+  <circle cx="350" cy="340" r="5" fill="url(#goldGrad)"/>
+
+  <!-- Position Announcement -->
+  <g transform="translate(350, 410)">
+    <rect x="-170" y="-30" width="340" height="52" rx="10" fill="url(#goldGrad)" opacity="0.15" stroke="url(#goldGrad)" stroke-width="1.5"/>
+    <text x="0" y="4" font-family="'Plus Jakarta Sans', sans-serif" font-size="24" font-weight="800" fill="url(#goldGrad)" text-anchor="middle" letter-spacing="2">
+      SECOND PLACE
+    </text>
+  </g>
+
+  <!-- Category & Level -->
+  <text x="350" y="490" font-family="'Plus Jakarta Sans', sans-serif" font-size="16" font-weight="600" fill="#E2E8F0" text-anchor="middle">
+    Arts and Science Colleges Category
+  </text>
+  <text x="350" y="518" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#38BDF8" text-anchor="middle" letter-spacing="1">
+    [ DISTRICT LEVEL INNOVATION SHOWCASE ]
+  </text>
+
+  <!-- Project Recognition Note -->
+  <g transform="translate(100, 560)">
+    <rect width="500" height="120" rx="10" fill="#08101C" stroke="#1E3E62" stroke-width="1"/>
+    <text x="250" y="35" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">
+      AWARDED TO ANBU IoT
+    </text>
+    <text x="250" y="60" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" font-weight="400" fill="#94A3B8" text-anchor="middle">
+      For excellence in IoT engineering, agricultural sensor systems,
+    </text>
+    <text x="250" y="80" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" font-weight="400" fill="#94A3B8" text-anchor="middle">
+      and practical low-cost embedded hardware innovation.
+    </text>
+  </g>
+
+  <!-- Bottom Verification Footer -->
+  <text x="350" y="730" font-family="'JetBrains Mono', monospace" font-size="11" fill="#64748B" text-anchor="middle" letter-spacing="1">
+    OFFICIAL COMMENDATION • DINDIGUL 2026
+  </text>
+</svg>

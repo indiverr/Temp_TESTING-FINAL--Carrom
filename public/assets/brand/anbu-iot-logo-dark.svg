@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 110" width="100%" height="100%">
+  <defs>
+    <linearGradient id="anbuBlueGradDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#0066FF" />
+    </linearGradient>
+    <linearGradient id="anbuOrangeGradDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF6B00" />
+      <stop offset="100%" stop-color="#EA580C" />
+    </linearGradient>
+    <linearGradient id="anbuAccentDark" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="50%" stop-color="#FF6B00" />
+      <stop offset="100%" stop-color="#EA580C" />
+    </linearGradient>
+  </defs>
+
+  <!-- Brand Mark / Icon -->
+  <g transform="translate(10, 15)">
+    <path d="M 40 4 L 72 22 L 72 58 L 40 76 L 8 58 L 8 22 Z" fill="none" stroke="url(#anbuBlueGradDark)" stroke-width="4" stroke-linejoin="round" />
+    <circle cx="40" cy="40" r="14" fill="url(#anbuOrangeGradDark)" />
+    <circle cx="40" cy="40" r="7" fill="#FFFFFF" />
+    
+    <path d="M 40 18 L 40 6" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" />
+    <circle cx="40" cy="6" r="3.5" fill="#38BDF8" />
+
+    <path d="M 60 51 L 68 56" stroke="#FF6B00" stroke-width="3.5" stroke-linecap="round" />
+    <circle cx="68" cy="56" r="3.5" fill="#FF6B00" />
+
+    <path d="M 20 51 L 12 56" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" />
+    <circle cx="12" cy="56" r="3.5" fill="#38BDF8" />
+
+    <path d="M 60 22 C 68 28 68 46 60 52" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 3" opacity="0.8" />
+    <path d="M 20 22 C 12 28 12 46 20 52" fill="none" stroke="#FF6B00" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 3" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="100" y="58" font-family="'Plus Jakarta Sans', 'Inter', system-ui, sans-serif" font-size="46" font-weight="800" fill="#FFFFFF" letter-spacing="-0.5">
+    ANBU
+  </text>
+
+  <!-- "IoT" Badge -->
+  <g transform="translate(242, 22)">
+    <rect x="0" y="0" width="76" height="42" rx="10" fill="url(#anbuOrangeGradDark)" />
+    <text x="38" y="29" font-family="'Plus Jakarta Sans', 'Inter', system-ui, sans-serif" font-size="25" font-weight="800" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">
+      IoT
+    </text>
+  </g>
+
+  <!-- Official Tagline -->
+  <text x="102" y="86" font-family="'Plus Jakarta Sans', 'Inter', system-ui, sans-serif" font-size="12.5" font-weight="700" fill="#94A3B8" letter-spacing="2.8">
+    SMART SOLUTION FOR A CONNECTED WORLD
+  </text>
+  
+  <rect x="102" y="93" width="320" height="2" fill="url(#anbuAccentDark)" rx="1" opacity="0.9" />
+</svg>

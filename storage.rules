@@ -1,0 +1,25 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.role == 'admin';
+    }
+
+    // Result Papers Storage Bucket Path
+    match /result_papers/{drawDate}/{fileName} {
+      // Any authenticated employee or user can view/download published official result sheets
+      allow read: if isAuthenticated();
+      
+      // Only authorized Admin can upload official result papers
+      // Validates file size (<= 15MB) and mime type (images or PDF only)
+      allow write: if isAdmin()
+        && request.resource.size < 15 * 1024 * 1024
+        && (request.resource.contentType.matches('image/.*') || request.resource.contentType == 'application/pdf');
+    }
+  }
+}

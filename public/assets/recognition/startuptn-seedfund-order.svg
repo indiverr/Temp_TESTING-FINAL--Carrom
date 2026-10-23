@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 900" width="100%" height="100%">
+  <defs>
+    <linearGradient id="docBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <linearGradient id="stnBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0066FF"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="stnOrange" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF6B00"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </linearGradient>
+    <filter id="docShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="10" stdDeviation="15" flood-color="#0B192C" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- Document Sheet -->
+  <rect x="25" y="25" width="700" height="850" rx="14" fill="url(#docBg)" stroke="#E2E8F0" stroke-width="2" filter="url(#docShadow)"/>
+
+  <!-- Top Official Header Banner -->
+  <rect x="25" y="25" width="700" height="12" rx="6" fill="url(#stnBlue)"/>
+  
+  <!-- StartupTN Header Branding -->
+  <g transform="translate(65, 65)">
+    <!-- StartupTN Badge Motif -->
+    <rect x="0" y="0" width="130" height="42" rx="8" fill="#0B192C"/>
+    <text x="65" y="27" font-family="'Plus Jakarta Sans', sans-serif" font-size="16" font-weight="800" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">
+      Startup<tspan fill="#FF6B00">TN</tspan>
+    </text>
+    
+    <text x="150" y="20" font-family="'Plus Jakarta Sans', sans-serif" font-size="15" font-weight="800" fill="#0B192C">
+      TAMIL NADU STARTUP &amp; INNOVATION MISSION
+    </text>
+    <text x="150" y="38" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" font-weight="500" fill="#64748B">
+      Government of Tamil Nadu • Innovation Ecosystem Initiative
+    </text>
+  </g>
+
+  <line x1="65" y1="130" x2="685" y2="130" stroke="#CBD5E1" stroke-width="1.5"/>
+
+  <!-- Sanction Order Details -->
+  <g transform="translate(65, 160)">
+    <!-- Location & Date Pill -->
+    <rect x="0" y="0" width="620" height="50" rx="8" fill="#F1F5F9" stroke="#E2E8F0" stroke-width="1"/>
+    
+    <text x="20" y="30" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="700" fill="#0B192C">
+      VENUE: <tspan font-weight="500" fill="#1E3E62">StartupTN Chennai Office</tspan>
+    </text>
+    <text x="360" y="30" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="700" fill="#0B192C">
+      DATE: <tspan font-weight="500" fill="#1E3E62">20 February 2026</tspan>
+    </text>
+  </g>
+
+  <!-- Document Body Content -->
+  <g transform="translate(65, 240)">
+    <text x="0" y="20" font-family="'Plus Jakarta Sans', sans-serif" font-size="18" font-weight="800" fill="#0B192C">
+      SEED GRANT SANCTION / ECOSYSTEM RECOGNITION
+    </text>
+    <text x="0" y="44" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="600" fill="#0066FF">
+      REF: STN/SEDF/2026/ORD-ANBU-IOT
+    </text>
+
+    <!-- Content Paragraphs -->
+    <text x="0" y="85" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="600" fill="#334155">
+      Subject: Sanction &amp; Formal Recognition for ANBU IoT Innovation
+    </text>
+
+    <text x="0" y="125" font-family="'Plus Jakarta Sans', sans-serif" font-size="13.5" font-weight="400" fill="#475569" width="600">
+      This document certifies the official recognition and ecosystem support
+    </text>
+    <text x="0" y="148" font-family="'Plus Jakarta Sans', sans-serif" font-size="13.5" font-weight="400" fill="#475569">
+      extended by StartupTN to the founding team of ANBU IoT for developing
+    </text>
+    <text x="0" y="171" font-family="'Plus Jakarta Sans', sans-serif" font-size="13.5" font-weight="400" fill="#475569">
+      practical Internet of Things (IoT), smart agriculture sensing, and automated
+    </text>
+    <text x="0" y="194" font-family="'Plus Jakarta Sans', sans-serif" font-size="13.5" font-weight="400" fill="#475569">
+      hardware prototypes addressing regional and agricultural challenges.
+    </text>
+
+    <!-- Key Validation Pillars -->
+    <g transform="translate(0, 230)">
+      <rect width="620" height="150" rx="10" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.2"/>
+      
+      <text x="24" y="32" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="700" fill="#0B192C">
+        Ecosystem Endorsements:
+      </text>
+
+      <circle cx="34" cy="62" r="5" fill="#0066FF"/>
+      <text x="50" y="66" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="500" fill="#334155">
+        Seed-stage innovation sanction and institutional mentoring support
+      </text>
+
+      <circle cx="34" cy="94" r="5" fill="#FF6B00"/>
+      <text x="50" y="98" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="500" fill="#334155">
+        Evaluation and verification of working agricultural hardware prototypes
+      </text>
+
+      <circle cx="34" cy="126" r="5" fill="#10B981"/>
+      <text x="50" y="130" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="500" fill="#334155">
+        Ecosystem access to state incubation pipelines &amp; mentorship tracks
+      </text>
+    </g>
+  </g>
+
+  <!-- Official Seal & Authentication Mark -->
+  <g transform="translate(480, 680)">
+    <!-- Round Stamp / Seal -->
+    <circle cx="90" cy="70" r="58" fill="none" stroke="#0066FF" stroke-width="2.5" stroke-dasharray="3 3"/>
+    <circle cx="90" cy="70" r="52" fill="none" stroke="#0066FF" stroke-width="1.5"/>
+    <text x="90" y="58" font-family="'Plus Jakarta Sans', sans-serif" font-size="10" font-weight="800" fill="#0066FF" text-anchor="middle" letter-spacing="1">
+      STARTUP TN
+    </text>
+    <text x="90" y="74" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="700" fill="#0066FF" text-anchor="middle">
+      SANCTIONED
+    </text>
+    <text x="90" y="88" font-family="'Plus Jakarta Sans', sans-serif" font-size="8" font-weight="600" fill="#64748B" text-anchor="middle">
+      CHENNAI • 2026
+    </text>
+  </g>
+
+  <g transform="translate(65, 720)">
+    <line x1="0" y1="0" x2="240" y2="0" stroke="#0B192C" stroke-width="1.5"/>
+    <text x="0" y="24" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="700" fill="#0B192C">
+      Mission Directorate
+    </text>
+    <text x="0" y="42" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="500" fill="#64748B">
+      StartupTN • Chennai
+    </text>
+  </g>
+</svg>
