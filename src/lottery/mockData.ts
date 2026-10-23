@@ -10,6 +10,7 @@ export const INITIAL_STAFF: EmployeeProfile[] = [
 ];
 
 export const LOTTERY_COLUMNS_SPEC: LotterySeriesColumn[] = [
+  { id: 'c0', startRange: 0, endRange: 24, rangeLabel: '0000 - 0024', headerBg: '#0F172A', textColor: '#0F172A' },
   { id: 'c1', startRange: 75, endRange: 99, rangeLabel: '0075 - 0099', headerBg: '#00E500', textColor: '#008A1B' },
   { id: 'c2', startRange: 300, endRange: 324, rangeLabel: '0300 - 0324', headerBg: '#FF0000', textColor: '#DC2626' },
   { id: 'c3', startRange: 725, endRange: 749, rangeLabel: '0725 - 0749', headerBg: '#0052FF', textColor: '#0052FF' },

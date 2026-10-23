@@ -10,6 +10,7 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import { TicketBooking, SelectedTicketItem, SystemConfig, LoginType } from '../types';
+import { LOTTERY_COLUMNS_SPEC } from '../mockData';
 
 interface TicketInventoryHeaderProps {
   config: SystemConfig;
@@ -47,13 +48,21 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   const [selectedMultiTickets, setSelectedMultiTickets] = useState<SelectedTicketItem[]>([]);
   const [isMultiBookModalOpen, setIsMultiBookModalOpen] = useState(false);
 
+  // Active series column from LOTTERY_COLUMNS_SPEC (default 0000 - 0024)
+  const [selectedColumnId, setSelectedColumnId] = useState<string>(
+    LOTTERY_COLUMNS_SPEC[0]?.id || 'c0'
+  );
+
   // Success / error popups
   const [successTicket, setSuccessTicket] = useState<string | null>(null);
   const [alreadyBookedNum, setAlreadyBookedNum] = useState<string | null>(null);
 
-  // 0000 to 0024
+  const activeColumn =
+    LOTTERY_COLUMNS_SPEC.find((c) => c.id === selectedColumnId) || LOTTERY_COLUMNS_SPEC[0];
+
+  // 25 numbers for the active series column
   const quickNumbers = Array.from({ length: 25 }, (_, i) =>
-    i.toString().padStart(4, '0')
+    (activeColumn.startRange + i).toString().padStart(4, '0')
   );
 
   const isTicketBooked = (num: string) =>
@@ -141,22 +150,31 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   return (
     <div className="w-full flex flex-col space-y-5 select-none">
       {/* Header Bar */}
-      <div className="bg-white rounded-xl p-4 sm:p-5 shadow-xs border border-slate-200">
+      <div className="bg-white rounded-xl p-4 sm:p-5 shadow-xs border border-slate-200 space-y-3.5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center space-x-2.5">
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">
                 {config.seriesTitle}
               </h2>
-              <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                0000 – 0024
+              <span className="text-xs font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded border border-slate-200">
+                {activeColumn.rangeLabel}
               </span>
             </div>
             <div className="flex items-center space-x-2 text-xs text-slate-500 mt-1">
               <Calendar className="w-3.5 h-3.5 text-slate-400" />
               <span>Draw Date: <strong className="text-slate-700">{config.businessDate}</strong></span>
               <span>•</span>
-              <span>Booked: <strong className="text-slate-700">{bookedTickets.length} / 25</strong></span>
+              <span>
+                Series Booked:{' '}
+                <strong className="text-slate-700">
+                  {quickNumbers.filter((n) => isTicketBooked(n)).length} / 25
+                </strong>
+              </span>
+              <span>•</span>
+              <span>
+                Total Booked: <strong className="text-slate-700">{bookedTickets.length}</strong>
+              </span>
             </div>
           </div>
 
@@ -202,6 +220,29 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               <span>Available Sheet</span>
             </button>
           </div>
+        </div>
+
+        {/* Series Range Selector matching Available Sheet columns */}
+        <div className="pt-2.5 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto pb-1">
+          <span className="text-[11px] font-semibold text-slate-500 mr-1 shrink-0">
+            Series:
+          </span>
+          {LOTTERY_COLUMNS_SPEC.map((col) => {
+            const isActive = col.id === activeColumn.id;
+            return (
+              <button
+                key={col.id}
+                onClick={() => setSelectedColumnId(col.id)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold whitespace-nowrap transition-colors border shrink-0 ${
+                  isActive
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {col.rangeLabel}
+              </button>
+            );
+          })}
         </div>
       </div>
 

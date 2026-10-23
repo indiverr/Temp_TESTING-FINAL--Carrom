@@ -32,7 +32,7 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
   const rowCount = 25;
 
   const isNumberBooked = (numStr: string) =>
-    bookedTickets.some((b) => b.ticketNumber === numStr);
+    bookedTickets.some((b) => b.ticketNumber === numStr && b.bookingStatus === 'Booked');
 
   const handleDownload = () => {
     setDownloadSuccess(true);
