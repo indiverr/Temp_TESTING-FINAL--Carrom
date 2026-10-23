@@ -5,9 +5,7 @@ import {
   Calendar,
   Plus,
   ShieldCheck,
-  Sparkles,
   X,
-  AlertCircle,
 } from 'lucide-react';
 import { TodayWinnerRecord, LoginType } from '../types';
 
@@ -37,7 +35,6 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newNumber, setNewNumber] = useState('');
   const [newPrizeCategory, setNewPrizeCategory] = useState('1st Prize');
-  const [newPrizeAmount, setNewPrizeAmount] = useState<number>(100000);
   const [newNotes, setNewNotes] = useState('');
   const [error, setError] = useState('');
 
@@ -46,53 +43,51 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
   const handleSubmitWinner = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newNumber || newNumber.length !== 4) {
-      setError('Please provide a valid 4-digit winning ticket number (e.g. 0012).');
+      setError('Please enter a valid 4-digit ticket number.');
       return;
     }
     setError('');
-    onAddWinner(newNumber, newPrizeCategory, newPrizeAmount, newNotes);
+    onAddWinner(newNumber, newPrizeCategory, 0, newNotes);
     setIsAddModalOpen(false);
     setNewNumber('');
     setNewNotes('');
   };
 
-  const totalPrizeMoney = filteredWinners.reduce((sum, w) => sum + w.prizeAmount, 0);
-
   return (
-    <div className="w-full flex flex-col space-y-6 select-none">
-      {/* 1. Page Heading */}
-      <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/90 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3.5">
+    <div className="w-full flex flex-col space-y-5 select-none">
+      {/* Header */}
+      <div className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center space-x-3">
           <button
             onClick={onBack}
-            className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 text-slate-700 shadow-xs transition-all active:scale-95"
-            title="Back to Dashboard"
+            className="p-2 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-700 transition-colors"
+            title="Back to Overview"
           >
-            <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+            <ArrowLeft className="w-4 h-4" />
           </button>
           <div>
-            <div className="flex items-center space-x-2.5">
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                Official Prize Declaration & Today Winners
+            <div className="flex items-center space-x-2">
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                Draw Winners
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-800 border border-amber-200">
+              <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                 {seriesTitle}
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-              Verified announcement of winning lottery ticket numbers and prize disbursements
+            <p className="text-xs text-slate-500 mt-0.5">
+              Declared winning ticket numbers for {selectedDate}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700">
-            <Calendar className="w-4 h-4 text-amber-600" />
-            <span>Draw Date:</span>
+        <div className="flex items-center space-x-2.5">
+          <div className="flex items-center space-x-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-700">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span>Date:</span>
             <select
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent font-extrabold text-slate-900 focus:outline-none cursor-pointer"
+              className="bg-transparent font-semibold text-slate-900 focus:outline-none cursor-pointer"
             >
               <option value="02 Oct 2026">02 Oct 2026</option>
               <option value="03 Oct 2026">03 Oct 2026</option>
@@ -103,79 +98,25 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
           {currentRole === 'admin' && (
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl shadow-xs active:scale-95 transition-all flex items-center space-x-1.5"
+              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-2 rounded-lg transition-colors flex items-center space-x-1.5"
             >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Announce Winner</span>
+              <Plus className="w-4 h-4" />
+              <span>Add Winner</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* 2. Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl p-5 border border-amber-200/80 shadow-xs flex items-center justify-between">
-          <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Prizes Declared
-            </span>
-            <span className="text-2xl sm:text-3xl font-black text-slate-900 mt-1 block font-mono">
-              {filteredWinners.length}
-            </span>
-            <span className="text-[11px] font-semibold text-amber-700 mt-0.5 block">
-              Official draw category entries
-            </span>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
-            <Trophy className="w-6 h-6 stroke-[2.2]" />
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between">
-          <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Active Draw Series
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-emerald-600 mt-1 block">
-              {seriesTitle}
-            </span>
-            <span className="text-[11px] font-semibold text-emerald-700 mt-0.5 block">
-              Official draw series
-            </span>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <Sparkles className="w-6 h-6 stroke-[2.2]" />
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between">
-          <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Verification Authority
-            </span>
-            <span className="text-lg font-black text-slate-900 mt-1 block">
-              Lottery Commission
-            </span>
-            <span className="text-[11px] font-semibold text-slate-500 mt-0.5 block">
-              Cryptographically signed
-            </span>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <ShieldCheck className="w-6 h-6 stroke-[2.2]" />
-          </div>
-        </div>
-      </div>
-
-      {/* Winners List / Official Announcement */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      {/* Winners Grid */}
+      <div>
         {filteredWinners.length === 0 ? (
-          <div className="py-20 text-center space-y-2">
-            <div className="w-14 h-14 mx-auto rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
-              <Trophy className="w-7 h-7" />
+          <div className="bg-white rounded-xl border border-slate-200 py-16 text-center space-y-1.5">
+            <div className="w-10 h-10 mx-auto rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center mb-2">
+              <Trophy className="w-5 h-5" />
             </div>
-            <h3 className="font-extrabold text-sm text-slate-700">No Winners Announced Yet</h3>
-            <p className="text-xs text-slate-400 max-w-xs mx-auto">
-              Official draw results for {selectedDate} will appear here once verified by the lottery board.
+            <h3 className="font-bold text-sm text-slate-800">No Winners Declared</h3>
+            <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              Winning numbers for {selectedDate} have not been posted yet.
             </p>
           </div>
         ) : (
@@ -183,39 +124,37 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
             {filteredWinners.map((win) => (
               <div
                 key={win.id}
-                className="bg-white rounded-3xl p-5 shadow-sm border border-amber-200/80 relative overflow-hidden group hover:shadow-md transition-all flex flex-col justify-between"
+                className="bg-white rounded-xl p-5 shadow-2xs border border-slate-200 flex flex-col justify-between"
               >
-                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-amber-200/40 to-transparent rounded-bl-full pointer-events-none" />
-
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                    <span className="px-2.5 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200">
                       {win.prizeCategory}
                     </span>
-                    <span className="text-[10px] text-slate-400 font-semibold">{win.enteredAt}</span>
+                    <span className="text-[11px] text-slate-400">{win.enteredAt}</span>
                   </div>
 
                   <div className="flex items-center justify-between my-3">
                     <div>
-                      <span className="text-[10px] text-slate-400 font-bold uppercase block">Winning Ticket</span>
-                      <span className="text-3xl font-black font-mono tracking-widest text-slate-900 drop-shadow-xs">
+                      <span className="text-[11px] text-slate-500 font-medium block">Winning Ticket</span>
+                      <span className="text-2xl font-bold font-mono tracking-wider text-slate-900">
                         #{win.winningNumber}
                       </span>
                     </div>
 
                     <div className="text-right">
-                      <span className="text-[10px] text-slate-400 font-bold uppercase block">Series</span>
-                      <span className="text-sm font-black text-emerald-600">{win.seriesTitle}</span>
+                      <span className="text-[11px] text-slate-500 font-medium block">Series</span>
+                      <span className="text-xs font-semibold text-slate-800">{win.seriesTitle}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 mt-2">
-                  <div className="flex items-center space-x-1">
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 mt-2">
+                  <div className="flex items-center space-x-1.5">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Verified: {win.verifiedBy}</span>
+                    <span>Recorded by {win.verifiedBy}</span>
                   </div>
-                  <span className="font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
+                  <span className="font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[11px]">
                     {win.status}
                   </span>
                 </div>
@@ -225,38 +164,38 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
         )}
       </div>
 
-      {/* Admin Add Winner Modal */}
+      {/* Add Winner Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white w-full max-w-[310px] rounded-3xl shadow-2xl overflow-hidden border border-slate-100 p-4 animate-in zoom-in-95">
-            <div className="bg-amber-500 text-white rounded-2xl p-3 flex items-center justify-between mb-3 shadow-sm">
-              <span className="font-black text-sm tracking-wide">Enter Official Winner</span>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-white">
-                <X className="w-5 h-5 stroke-[2.5]" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white w-full max-w-sm rounded-xl shadow-lg overflow-hidden border border-slate-200 p-5">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+              <span className="font-bold text-sm text-slate-900">Add Winning Number</span>
+              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitWinner} className="space-y-3">
+            <form onSubmit={handleSubmitWinner} className="space-y-3.5">
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  4-Digit Winning Number:
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  4-Digit Ticket Number:
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. 0012"
+                  placeholder="0012"
                   maxLength={4}
                   value={newNumber}
                   onChange={(e) => setNewNumber(e.target.value)}
-                  className="w-full text-center text-xl font-mono font-black py-2 bg-slate-50 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-amber-500"
+                  className="w-full text-center text-lg font-mono font-bold py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Prize Category:</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Category:</label>
                 <select
                   value={newPrizeCategory}
                   onChange={(e) => setNewPrizeCategory(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:outline-none"
+                  className="w-full px-3 py-2 text-xs font-medium bg-white border border-slate-200 rounded-lg focus:outline-none"
                 >
                   <option value="1st Prize">1st Prize</option>
                   <option value="2nd Prize">2nd Prize</option>
@@ -266,27 +205,27 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Verification Notes:</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Notes (Optional):</label>
                 <input
                   type="text"
-                  placeholder="Optional notes..."
+                  placeholder="Enter remarks..."
                   value={newNotes}
                   onChange={(e) => setNewNotes(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none"
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none"
                 />
               </div>
 
               {error && (
-                <div className="p-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-[11px] font-semibold">
+                <div className="p-2.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-medium">
                   {error}
                 </div>
               )}
 
               <button
                 type="submit"
-                className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs shadow-md shadow-amber-500/30 active:scale-95 transition-all"
+                className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors"
               >
-                Publish Official Winner
+                Save Winner
               </button>
             </form>
           </div>

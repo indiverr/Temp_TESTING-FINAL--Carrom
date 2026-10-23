@@ -5,6 +5,10 @@ import {
   Share2,
   Image as ImageIcon,
   Check,
+  MessageSquare,
+  Building2,
+  Send,
+  Mail,
 } from 'lucide-react';
 import { LOTTERY_COLUMNS_SPEC } from '../mockData';
 import { TicketBooking } from '../types';
@@ -36,39 +40,37 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
   };
 
   const shareApps = [
-    { name: 'WhatsApp', color: '#25D366', icon: '💬' },
-    { name: 'Business WhatsApp', color: '#128C7E', icon: '🏢' },
-    { name: 'Telegram', color: '#0088cc', icon: '✈️' },
-    { name: 'Gmail', color: '#EA4335', icon: '✉️' },
-    { name: 'Bluetooth', color: '#0082FC', icon: '📶' },
-    { name: 'More', color: '#64748B', icon: '•••' },
+    { name: 'WhatsApp', icon: MessageSquare },
+    { name: 'WhatsApp Business', icon: Building2 },
+    { name: 'Telegram', icon: Send },
+    { name: 'Email', icon: Mail },
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 bg-black/70 backdrop-blur-xs animate-in fade-in select-none">
-      <div className="bg-white w-full max-w-[370px] rounded-3xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[92vh] animate-in zoom-in-95 relative">
-        {/* Blue Header Bar (media_1791869866991_e8802cbb.jpg) */}
-        <div className="bg-blue-600 text-white p-3 flex items-center justify-between shadow-sm">
-          <div className="flex items-center space-x-1.5">
-            <ImageIcon className="w-5 h-5 text-white" />
-            <h3 className="font-extrabold text-xs tracking-wide">
-              Available (Unbooked) Tickets
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 select-none">
+      <div className="bg-white w-full max-w-4xl rounded-xl shadow-xl overflow-hidden border border-slate-200 flex flex-col max-h-[90vh] relative">
+        {/* Header Bar */}
+        <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <ImageIcon className="w-4 h-4 text-slate-300" />
+            <h3 className="font-bold text-xs sm:text-sm tracking-wide">
+              Available Tickets Sheet
             </h3>
           </div>
 
-          <div className="flex items-center space-x-1.5">
+          <div className="flex items-center space-x-2">
             <button
               onClick={handleDownload}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg text-[10px] font-black flex items-center space-x-1 shadow-xs active:scale-95 transition-all"
+              className="bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors"
             >
               {downloadSuccess ? (
                 <>
-                  <Check className="w-3 h-3" />
+                  <Check className="w-3.5 h-3.5" />
                   <span>Saved</span>
                 </>
               ) : (
                 <>
-                  <Download className="w-3 h-3" />
+                  <Download className="w-3.5 h-3.5" />
                   <span>Download</span>
                 </>
               )}
@@ -76,26 +78,25 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
 
             <button
               onClick={() => setIsShareSheetOpen(true)}
-              className="p-1 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all active:scale-95"
-              title="Share Ticket List"
+              className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors"
+              title="Share Ticket Sheet"
             >
               <Share2 className="w-4 h-4" />
             </button>
 
             <button
               onClick={onClose}
-              className="p-1 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all active:scale-95"
+              className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* 13-Column Grid Table where booked tickets are replaced with black "-" blocks */}
-        <div className="flex-1 overflow-x-auto overflow-y-auto border-t border-slate-200">
+        {/* 13-Column Grid Table */}
+        <div className="flex-1 overflow-x-auto overflow-y-auto">
           <table className="w-full border-collapse text-center">
-            {/* Headers with their vibrant series colors */}
-            <thead className="sticky top-0 z-20 shadow-xs">
+            <thead className="sticky top-0 z-20">
               <tr>
                 {LOTTERY_COLUMNS_SPEC.map((col) => {
                   const [start, end] = col.rangeLabel.split(' - ');
@@ -103,18 +104,17 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
                     <th
                       key={col.id}
                       style={{ backgroundColor: col.headerBg }}
-                      className="p-1 border border-slate-300 text-white font-extrabold text-[10px] min-w-[56px] whitespace-nowrap"
+                      className="p-1.5 border border-slate-300 text-white font-bold text-[10px] min-w-[56px] whitespace-nowrap"
                     >
-                      <div className="leading-tight drop-shadow-sm">{start}</div>
+                      <div className="leading-tight">{start}</div>
                       <div className="text-[8px] opacity-80">-</div>
-                      <div className="leading-tight drop-shadow-sm">{end}</div>
+                      <div className="leading-tight">{end}</div>
                     </th>
                   );
                 })}
               </tr>
             </thead>
 
-            {/* 25 Rows matching master specification */}
             <tbody className="divide-y divide-slate-200 font-mono text-[11px] font-bold">
               {Array.from({ length: rowCount }).map((_, rowIndex) => (
                 <tr key={rowIndex}>
@@ -130,7 +130,7 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
                           color: isBooked ? '#ffffff' : col.textColor,
                           backgroundColor: isBooked ? '#000000' : '#ffffff',
                         }}
-                        className="p-1 border border-slate-200 font-black text-[10px] whitespace-nowrap"
+                        className="p-1.5 border border-slate-200 font-bold text-[11px] whitespace-nowrap"
                       >
                         {isBooked ? '-' : numStr}
                       </td>
@@ -142,39 +142,39 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
           </table>
         </div>
 
-        {/* Share Ticket List Bottom Drawer (Exact replica of media_1791869866991_e8802cbb.jpg) */}
+        {/* Share Drawer */}
         {isShareSheetOpen && (
-          <div className="absolute inset-x-0 bottom-0 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200 p-4 z-40 animate-in slide-in-from-bottom">
-            <div className="flex items-center justify-between mb-4">
-              <h4 className="font-black text-sm text-slate-800 tracking-tight">
-                Share Ticket List
+          <div className="absolute inset-x-0 bottom-0 bg-white rounded-t-xl shadow-xl border-t border-slate-200 p-4 z-40">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-bold text-xs text-slate-900">
+                Share Sheet
               </h4>
               <button
                 onClick={() => setIsShareSheetOpen(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="grid grid-cols-4 gap-3 text-center">
-              {shareApps.map((app) => (
-                <button
-                  key={app.name}
-                  onClick={() => setIsShareSheetOpen(false)}
-                  className="flex flex-col items-center justify-center p-2 rounded-2xl hover:bg-slate-50 active:scale-95 transition-all group"
-                >
-                  <div
-                    className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl text-white shadow-md mb-1.5 transition-transform group-hover:scale-105"
-                    style={{ backgroundColor: app.color }}
+              {shareApps.map((app) => {
+                const IconComp = app.icon;
+                return (
+                  <button
+                    key={app.name}
+                    onClick={() => setIsShareSheetOpen(false)}
+                    className="flex flex-col items-center justify-center p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
                   >
-                    <span>{app.icon}</span>
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-700 leading-tight">
-                    {app.name}
-                  </span>
-                </button>
-              ))}
+                    <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center mb-1.5">
+                      <IconComp className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      {app.name}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
