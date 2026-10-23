@@ -160,19 +160,19 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
         </div>
       </div>
 
-      {/* 2. Outstanding-Balance Summary Cards */}
+      {/* 2. Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Outstanding */}
+        {/* Card 1: Total Pending */}
         <div className="bg-white rounded-2xl p-5 border border-rose-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Total Outstanding Due
+              Total Unpaid Tickets
             </span>
             <span className="text-2xl sm:text-3xl font-black text-rose-600 mt-1 block font-mono">
-              ₹{totalOutstanding.toLocaleString()}
+              {filtered.length}
             </span>
             <span className="text-[11px] font-semibold text-rose-700 mt-0.5 block">
-              Across {filtered.length} pending bookings
+              Pending ticket bookings
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
@@ -180,35 +180,35 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
           </div>
         </div>
 
-        {/* Card 2: Booked Value */}
+        {/* Card 2: Full Tickets */}
         <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Total Booked Value
+              Full Tickets
             </span>
             <span className="text-2xl sm:text-3xl font-black text-slate-900 mt-1 block font-mono">
-              ₹{totalBookedValue.toLocaleString()}
+              {fullTicketsCount}
             </span>
             <span className="text-[11px] font-semibold text-slate-500 mt-0.5 block">
-              Full ticket commitment
+              Full ticket selection
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <DollarSign className="w-6 h-6 stroke-[2.2]" />
+            <Layers className="w-6 h-6 stroke-[2.2]" />
           </div>
         </div>
 
-        {/* Card 3: Already Collected Partial */}
+        {/* Card 3: Half Tickets */}
         <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Partial Receipts
+              Half Tickets
             </span>
             <span className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1 block font-mono">
-              ₹{totalPartiallyPaid.toLocaleString()}
+              {halfTicketsCount}
             </span>
             <span className="text-[11px] font-semibold text-emerald-700 mt-0.5 block">
-              {partialCount} tickets with partial deposits
+              Half ticket selection
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -273,9 +273,9 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
             onChange={(e) => setStatusFilter(e.target.value as any)}
             className="px-3 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none cursor-pointer"
           >
-            <option value="all">All Payment States</option>
-            <option value="unpaid">Completely Unpaid (₹0)</option>
-            <option value="partial">Partially Paid</option>
+            <option value="all">All Status States</option>
+            <option value="unpaid">Unpaid</option>
+            <option value="partial">Partial</option>
           </select>
 
           <select
@@ -300,10 +300,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                 <th className="py-3.5 px-4">Customer Details</th>
                 <th className="py-3.5 px-4 text-center">Ticket #</th>
                 <th className="py-3.5 px-4 text-center">Half / Full Ticket</th>
-                <th className="py-3.5 px-4 text-right">Total Amount</th>
-                <th className="py-3.5 px-4 text-right">Amount Paid</th>
-                <th className="py-3.5 px-4 text-right">Balance Due</th>
-                <th className="py-3.5 px-4 text-center">Payment Status</th>
+                <th className="py-3.5 px-4 text-center">Status</th>
                 <th className="py-3.5 px-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -331,29 +328,20 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                     <div className="flex items-center justify-center space-x-1.5">
                       {item.halfSelected && (
                         <span className="font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded text-xs">
-                          Half ₹{item.halfAmount}
+                          Half
                         </span>
                       )}
                       {item.fullSelected && (
                         <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-xs">
-                          Full ₹{item.fullAmount}
+                          Full
                         </span>
                       )}
                     </div>
                   </td>
-                  <td className="py-3.5 px-4 text-right font-bold text-slate-900 font-mono">
-                    ₹{item.totalAmount}
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-bold text-emerald-600 font-mono">
-                    ₹{item.amountPaid}
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-black text-rose-600 font-mono">
-                    ₹{item.remainingBalance}
-                  </td>
                   <td className="py-3.5 px-4 text-center whitespace-nowrap">
                     {item.paymentStatus === 'Partial' || (item.amountPaid > 0 && item.remainingBalance > 0) ? (
                       <span className="px-2.5 py-1 rounded-full text-xs font-black bg-amber-50 text-amber-700 border border-amber-200">
-                        Partial (₹{item.amountPaid} Paid)
+                        Partial
                       </span>
                     ) : (
                       <span className="px-2.5 py-1 rounded-full text-xs font-black bg-rose-50 text-rose-700 border border-rose-200">
@@ -366,7 +354,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                       <button
                         onClick={() => handleOpenPayment(item)}
                         className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs active:scale-95 transition-all shadow-xs flex items-center space-x-1"
-                        title="Collect or settle payment"
+                        title="Confirm ticket settlement"
                       >
                         <Check className="w-3.5 h-3.5" />
                         <span>Settle</span>
@@ -402,7 +390,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
         )}
       </div>
 
-      {/* Explicit Payment Confirmation Modal with Partial Payment Support */}
+      {/* Explicit Settlement Confirmation Modal */}
       {selectedBookingForPay && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
           <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 animate-in zoom-in-95">
@@ -433,40 +421,11 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Total Ticket Price:</span>
-                  <span className="font-bold text-slate-800 font-mono">
-                    ₹{selectedBookingForPay.totalAmount}
+                  <span className="text-slate-500 font-semibold">Ticket Type:</span>
+                  <span className="font-bold text-slate-800 uppercase">
+                    {selectedBookingForPay.ticketType}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Already Paid:</span>
-                  <span className="font-bold text-emerald-600 font-mono">
-                    ₹{selectedBookingForPay.amountPaid}
-                  </span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-slate-200 font-bold">
-                  <span className="text-slate-700">Remaining Due Balance:</span>
-                  <span className="text-rose-600 font-black text-sm font-mono">
-                    ₹{selectedBookingForPay.remainingBalance}
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Payment Amount to Collect (₹):
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={selectedBookingForPay.remainingBalance}
-                  value={customPayAmount}
-                  onChange={(e) => setCustomPayAmount(Number(e.target.value))}
-                  className="w-full px-3.5 py-2.5 text-base font-black text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 font-mono"
-                />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Enter full balance for complete settlement, or enter lower amount for partial deposit.
-                </p>
               </div>
 
               <div>

@@ -350,7 +350,7 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                 {activePopupTicket}
               </span>
               <span className="text-[10px] font-semibold text-slate-600 block mt-0.5">
-                {config.seriesTitle} • ₹{config.fullTicketPrice} Full / ₹{config.halfTicketPrice} Half
+                {config.seriesTitle}
               </span>
             </div>
 
@@ -414,8 +414,8 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                   <tr>
                     <th className="py-1.5 px-2">S.No</th>
                     <th className="py-1.5 px-2">Ticket #</th>
-                    <th className="py-1.5 px-2">Half (₹{config.halfTicketPrice})</th>
-                    <th className="py-1.5 px-2">Full (₹{config.fullTicketPrice})</th>
+                    <th className="py-1.5 px-2">Half</th>
+                    <th className="py-1.5 px-2">Full</th>
                     <th className="py-1.5 px-2">Action</th>
                   </tr>
                 </thead>

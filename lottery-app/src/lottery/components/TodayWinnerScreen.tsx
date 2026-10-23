@@ -134,13 +134,13 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
         <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Total Prize Money
+              Active Draw Series
             </span>
-            <span className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1 block font-mono">
-              ₹{totalPrizeMoney.toLocaleString()}
+            <span className="text-xl sm:text-2xl font-black text-emerald-600 mt-1 block">
+              {seriesTitle}
             </span>
             <span className="text-[11px] font-semibold text-emerald-700 mt-0.5 block">
-              Total declared prize pool
+              Official draw series
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -204,8 +204,8 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
                     </div>
 
                     <div className="text-right">
-                      <span className="text-[10px] text-slate-400 font-bold uppercase block">Prize Money</span>
-                      <span className="text-xl font-black text-emerald-600">₹{win.prizeAmount.toLocaleString()}</span>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">Series</span>
+                      <span className="text-sm font-black text-emerald-600">{win.seriesTitle}</span>
                     </div>
                   </div>
                 </div>
@@ -263,16 +263,6 @@ export const TodayWinnerScreen: React.FC<TodayWinnerScreenProps> = ({
                   <option value="3rd Prize">3rd Prize</option>
                   <option value="Consolation Prize">Consolation Prize</option>
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Prize Amount (₹):</label>
-                <input
-                  type="number"
-                  value={newPrizeAmount}
-                  onChange={(e) => setNewPrizeAmount(Number(e.target.value))}
-                  className="w-full px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-200 rounded-xl focus:outline-none"
-                />
               </div>
 
               <div>

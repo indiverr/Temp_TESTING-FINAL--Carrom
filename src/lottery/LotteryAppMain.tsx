@@ -209,7 +209,7 @@ export const LotteryAppMain: React.FC = () => {
         notes
       );
       if (fbRes.success) {
-        showToast(`[Firestore] Payment of ₹${amount} confirmed for #${ticketNum}`);
+        showToast(`[Firestore] Settlement confirmed for #${ticketNum}`);
         reloadData();
       } else {
         showToast(`[Firestore Error] ${fbRes.error}`);
@@ -229,7 +229,7 @@ export const LotteryAppMain: React.FC = () => {
     );
     if (res.success) {
       reloadData();
-      showToast(`Payment of ₹${amount} confirmed for #${ticketNum}`);
+      showToast(`Settlement confirmed for #${ticketNum}`);
     } else {
       showToast(res.error || 'Payment confirmation failed');
     }
@@ -312,15 +312,13 @@ export const LotteryAppMain: React.FC = () => {
   const handleExportRecords = () => {
     // Generate CSV data for authorized download
     const rows = [
-      ['Ticket Number', 'Series', 'Customer', 'Phone', 'Type', 'Amount', 'Paid', 'Status', 'Date'],
+      ['Ticket Number', 'Series', 'Customer', 'Phone', 'Type', 'Status', 'Date'],
       ...allBookings.map((b) => [
         b.ticketNumber,
         b.seriesTitle,
         b.customerName,
         b.customerPhone,
         b.ticketType,
-        b.totalAmount.toString(),
-        b.amountPaid.toString(),
         b.paymentStatus,
         b.date,
       ]),

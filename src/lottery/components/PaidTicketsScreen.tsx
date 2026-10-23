@@ -101,23 +101,23 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
         </div>
       </div>
 
-      {/* 2. Outstanding & Settlement Summary Cards */}
+      {/* 2. Settlement Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Revenue Collected */}
+        {/* Card 1: Total Paid Tickets */}
         <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Total Revenue Collected
+              Total Paid Tickets
             </span>
             <span className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1 block font-mono">
-              ₹{totalCollected.toLocaleString()}
+              {paidBookings.length}
             </span>
             <span className="text-[11px] font-semibold text-emerald-700 mt-0.5 block">
-              Across {filtered.length} verified collections
+              Verified settled tickets
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <DollarSign className="w-6 h-6 stroke-[2.2]" />
+            <CheckCircle2 className="w-6 h-6 stroke-[2.2]" />
           </div>
         </div>
 
@@ -139,17 +139,17 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Average Ticket Collection */}
+        {/* Card 3: Full Tickets */}
         <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Average Receipt Value
+              Full Tickets
             </span>
             <span className="text-2xl sm:text-3xl font-black text-slate-900 mt-1 block font-mono">
-              ₹{avgAmount}
+              {fullCount}
             </span>
             <span className="text-[11px] font-semibold text-slate-500 mt-0.5 block">
-              Per ticket transaction
+              Settled full tickets
             </span>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
@@ -229,10 +229,8 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
                 <th className="py-3.5 px-4">Customer Details</th>
                 <th className="py-3.5 px-4 text-center">Ticket #</th>
                 <th className="py-3.5 px-4 text-center">Type</th>
-                <th className="py-3.5 px-4 text-right">Total Amount</th>
-                <th className="py-3.5 px-4 text-right">Amount Paid</th>
                 <th className="py-3.5 px-4 text-center">Reference ID</th>
-                <th className="py-3.5 px-4 text-center">Payment Status</th>
+                <th className="py-3.5 px-4 text-center">Status</th>
                 <th className="py-3.5 px-4 text-center">Audit Trail</th>
               </tr>
             </thead>
@@ -260,12 +258,6 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
                     <span className="capitalize px-2.5 py-0.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
                       {item.ticketType}
                     </span>
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-bold text-slate-900 font-mono">
-                    ₹{item.totalAmount}
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-black text-emerald-600 font-mono">
-                    ₹{item.amountPaid}
                   </td>
                   <td className="py-3.5 px-4 text-center font-mono text-xs text-slate-600">
                     <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -300,7 +292,7 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
             </div>
             <h3 className="font-extrabold text-sm text-slate-800">No Paid Tickets Found</h3>
             <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              No confirmed payments match your current query. Once customer balances are settled, they will appear here.
+              No confirmed settlements match your current query. Once tickets are settled, they will appear here.
             </p>
           </div>
         )}
@@ -341,8 +333,8 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
                   <span className="font-medium text-slate-700">{inspectBooking.customerPhone}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold">Amount Paid:</span>
-                  <span className="font-black text-emerald-600 font-mono text-sm">₹{inspectBooking.amountPaid}</span>
+                  <span className="text-slate-500 font-semibold">Ticket Type:</span>
+                  <span className="font-black text-emerald-600 uppercase text-sm">{inspectBooking.ticketType}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500 font-semibold">Receipt Reference:</span>

@@ -95,14 +95,14 @@ export const ConfigSettingsScreen: React.FC<ConfigSettingsScreenProps> = ({
       </div>
 
       <form onSubmit={handleSave} className="flex-1 space-y-5">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Series & Draw Date */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs space-y-3">
-            <div className="flex items-center space-x-2 text-xs font-black text-slate-800">
-              <Tag className="w-4 h-4 text-blue-600" />
-              <span>Ticket Series & Business Date</span>
-            </div>
+        {/* Series & Draw Date */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs space-y-3">
+          <div className="flex items-center space-x-2 text-xs font-black text-slate-800">
+            <Tag className="w-4 h-4 text-blue-600" />
+            <span>Ticket Series & Business Date</span>
+          </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
                 Custom Series Name:
@@ -129,41 +129,6 @@ export const ConfigSettingsScreen: React.FC<ConfigSettingsScreenProps> = ({
                 disabled={currentRole !== 'admin'}
                 className="w-full px-3 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 text-slate-900"
               />
-            </div>
-          </div>
-
-          {/* Configurable Half & Full Prices */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs space-y-3">
-            <div className="flex items-center space-x-2 text-xs font-black text-slate-800">
-              <DollarSign className="w-4 h-4 text-emerald-600" />
-              <span>Ticket Pricing Rules (₹)</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Half Ticket Price:
-                </label>
-                <input
-                  type="number"
-                  value={halfPrice}
-                  onChange={(e) => setHalfPrice(Number(e.target.value))}
-                  disabled={currentRole !== 'admin'}
-                  className="w-full px-3 py-2 text-xs font-black bg-slate-50 border border-slate-200 rounded-xl focus:outline-none text-slate-900"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Full Ticket Price:
-                </label>
-                <input
-                  type="number"
-                  value={fullPrice}
-                  onChange={(e) => setFullPrice(Number(e.target.value))}
-                  disabled={currentRole !== 'admin'}
-                  className="w-full px-3 py-2 text-xs font-black bg-slate-50 border border-slate-200 rounded-xl focus:outline-none text-slate-900"
-                />
-              </div>
             </div>
           </div>
         </div>
@@ -220,7 +185,7 @@ export const ConfigSettingsScreen: React.FC<ConfigSettingsScreenProps> = ({
         {currentRole !== 'admin' && (
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center space-x-2 text-xs text-amber-800 font-semibold">
             <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-            <span>Read-only: Log in as Admin to modify authorized prices or series names.</span>
+            <span>Read-only: Log in as Admin to modify authorized series names or settings.</span>
           </div>
         )}
 
