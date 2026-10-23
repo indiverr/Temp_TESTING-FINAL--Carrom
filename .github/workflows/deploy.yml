@@ -32,7 +32,7 @@ jobs:
 
       - name: Build frontend
         working-directory: ./lottery-app
-        run: npm run build
+        run: npx tsc && npx vite build --base=/Temp_TESTING-FINAL--Carrom/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

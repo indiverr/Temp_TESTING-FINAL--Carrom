@@ -31,14 +31,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         <h2 className="text-2xl sm:text-3xl font-black text-center text-slate-800 mb-1 tracking-tight">
           Login
         </h2>
-        <p className="text-xs font-bold text-center text-slate-600 mb-4">
+        <p className="text-xs font-bold text-center text-slate-600 mb-6">
           Select Login Type
         </p>
-
-        {/* Demo Mode Guidance Banner */}
-        <div className="mb-4 p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/80 text-[11px] text-blue-800 text-center">
-          <span className="font-bold">✨ Remote UI Testing Demo:</span> Pre-configured mock credentials active. Click any role and hit Login to explore all workflows immediately.
-        </div>
 
         {/* 3 User Types with Avatars: Admin, Employee, Paid Employee */}
         <div className="grid grid-cols-3 gap-2 mb-4">

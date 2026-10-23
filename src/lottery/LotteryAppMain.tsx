@@ -524,35 +524,6 @@ export const LotteryAppMain: React.FC = () => {
         </div>
       </header>
 
-      {/* Remote UI Demo Mode Notice */}
-      <div className="bg-amber-50/90 border-b border-amber-200/80 px-4 py-2 text-xs text-amber-900">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-200 text-amber-900 uppercase tracking-wider">
-              Remote UI Demo Mode
-            </span>
-            <span className="font-semibold text-amber-900">
-              Interactive Prototype:
-            </span>
-            <span className="text-amber-800">
-              Bookings, payments, OTP codes, and ledger balances are simulated in browser memory for testing. No live database or banking transactions occur.
-            </span>
-          </div>
-          <div className="flex items-center space-x-2 text-[11px] font-bold">
-            <span className="bg-amber-100/90 border border-amber-300 text-amber-800 px-2 py-0.5 rounded-md">
-              Sample Data Active
-            </span>
-            <button
-              onClick={handleResetData}
-              className="text-amber-900 underline hover:text-amber-700 font-bold"
-              title="Reset sample bookings and winners to initial seed state"
-            >
-              Reset Seed Data
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white border border-slate-700 px-4 py-2 rounded-2xl shadow-2xl flex items-center space-x-2 text-xs font-bold animate-in fade-in slide-in-from-top-2">
