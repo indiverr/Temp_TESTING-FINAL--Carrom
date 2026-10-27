@@ -14,12 +14,12 @@ const admin = require('../functions/node_modules/firebase-admin');
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 process.env.FIREBASE_STORAGE_EMULATOR_HOST = '127.0.0.1:9199';
-process.env.GCLOUD_PROJECT = 'carrom-lottery-demo';
+process.env.GCLOUD_PROJECT = 'demo-carrom-lottery';
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    projectId: 'carrom-lottery-demo',
-    storageBucket: 'carrom-lottery-demo.appspot.com',
+    projectId: 'demo-carrom-lottery',
+    storageBucket: 'demo-carrom-lottery.appspot.com',
   });
 }
 
@@ -40,7 +40,7 @@ async function callCloudFunction(funcName, data, idToken) {
   const headers = { 'Content-Type': 'application/json' };
   if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
 
-  const res = await fetch(`http://127.0.0.1:5001/carrom-lottery-demo/us-central1/${funcName}`, {
+  const res = await fetch(`http://127.0.0.1:5001/demo-carrom-lottery/us-central1/${funcName}`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ data }),
@@ -390,6 +390,75 @@ async function run() {
     );
   } catch (err) {
     recordTest('Storage Persistence', 'Result-Paper Storage Upload', false, err.message);
+  }
+
+  // -------------------------------------------------------------
+  // TEST 9: Transactional Cancellation & Lock Release via cancelOrReverseBooking
+  // -------------------------------------------------------------
+  try {
+    // Cancel ticketMulti1 (which was booked in TEST 3)
+    const cancelRes = await callCloudFunction('cancelOrReverseBooking', {
+      ticketNumber: ticketMulti1,
+      drawDate,
+      seriesId,
+      reason: 'Customer requested counter cancellation',
+    }, adminToken);
+
+    // Verify ticket lock doc was released (deleted)
+    const ticketSnapAfter = await db.doc(`draws/${drawDate}/series/${seriesId}/tickets/${ticketMulti1}`).get();
+    const lockReleased = !ticketSnapAfter.exists;
+
+    // Verify booking status marked as Cancelled
+    const bookingQuery = await db.collection('bookings')
+      .where('ticketNumber', '==', ticketMulti1)
+      .where('drawDate', '==', drawDate)
+      .get();
+    const bData = bookingQuery.docs[0]?.data();
+    const bookingCancelled = bData?.bookingStatus === 'Cancelled' && bData?.remainingBalance === 0;
+
+    const passed = Boolean(cancelRes.result?.success) && lockReleased && bookingCancelled;
+    recordTest(
+      'Cancellation & Reversal',
+      'Transactional Booking Cancellation & Lock Release via cancelOrReverseBooking Cloud Function',
+      passed,
+      `Lock released: ${lockReleased}, Booking status: ${bData?.bookingStatus}, Remaining balance: ₹${bData?.remainingBalance}.`
+    );
+  } catch (err) {
+    recordTest('Cancellation & Reversal', 'Booking Cancellation via Cloud Function', false, err.message);
+  }
+
+  // -------------------------------------------------------------
+  // TEST 10: Server-Side Custom Role Assignment via setUserRoleClaims
+  // -------------------------------------------------------------
+  try {
+    const newStaffEmail = `new_clerk_${Date.now()}@carrom.test`;
+    const newStaffUser = await auth.createUser({ email: newStaffEmail, password: 'Password123!' });
+
+    // Assign 'employee' role via Cloud Function
+    const roleRes = await callCloudFunction('setUserRoleClaims', {
+      targetUid: newStaffUser.uid,
+      role: 'employee',
+      displayName: 'Counter Clerk',
+      phone: '9840998877',
+    }, adminToken);
+
+    // Verify Auth claims
+    const userRec = await auth.getUser(newStaffUser.uid);
+    const hasClaim = userRec.customClaims?.role === 'employee';
+
+    // Verify Firestore user record
+    const userDoc = await db.doc(`users/${newStaffUser.uid}`).get();
+    const hasUserDoc = userDoc.exists && userDoc.data().role === 'employee';
+
+    const passed = Boolean(roleRes.result?.success) && hasClaim && hasUserDoc;
+    recordTest(
+      'Role Administration',
+      'Server-Side Role Assignment via setUserRoleClaims Cloud Function (Admin-Only)',
+      passed,
+      `Custom claim verified in Auth: ${userRec.customClaims?.role}. Profile record persisted in /users/${newStaffUser.uid}.`
+    );
+  } catch (err) {
+    recordTest('Role Administration', 'Role Assignment via Cloud Function', false, err.message);
   }
 
   // -------------------------------------------------------------

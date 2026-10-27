@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
+  Plus,
+  Palette,
   Calendar,
   Image as ImageIcon,
   Search,
@@ -8,16 +10,88 @@ import {
   Download,
   Trash2,
   CheckSquare,
+  Lock,
+  Copy,
+  Clock,
+  AlertCircle,
 } from 'lucide-react';
-import { TicketBooking, SelectedTicketItem, SystemConfig, LoginType } from '../types';
+import {
+  TicketBooking,
+  TicketLock,
+  SelectedTicketItem,
+  SystemConfig,
+  LoginType,
+  BookingConfirmationSummary,
+  TicketInventoryItem,
+  GridAppearanceConfig,
+  DEFAULT_GRID_APPEARANCE,
+} from '../types';
+import { lotteryService } from '../lotteryService';
 import { LOTTERY_COLUMNS_SPEC } from '../mockData';
 
 interface TicketInventoryHeaderProps {
   config: SystemConfig;
   bookedTickets: TicketBooking[];
+  activeLocks?: TicketLock[];
+  currentUserUid?: string;
   currentRole: LoginType;
-  onBookSingleTicket: (ticketNum: string, name: string, phone: string) => void;
-  onBookMultipleTickets: (items: SelectedTicketItem[], name: string, phone: string) => void;
+  inventoryTickets?: TicketInventoryItem[];
+  gridAppearance?: GridAppearanceConfig;
+  onAddTicketInventory?: (
+    tickets: string[],
+    drawDate: string,
+    seriesId: string,
+    seriesTitle: string,
+    status: 'PUBLISHED' | 'UNPUBLISHED'
+  ) => Promise<{ success: boolean; addedCount: number; error?: string }>;
+  onUpdateGridAppearance?: (
+    config: Partial<GridAppearanceConfig>
+  ) => Promise<{ success: boolean; config?: GridAppearanceConfig; error?: string }>;
+  onAcquireTicketLock?: (ticketNumbers: string[]) => Promise<{
+    success: boolean;
+    lockId?: string;
+    ticketNumbers?: string[];
+    expiresAtMs?: number;
+    lockedByOther?: boolean;
+    alreadyBooked?: boolean;
+    error?: string;
+  }>;
+  onRenewTicketLock?: (
+    ticketNumbers: string[],
+    lockId: string
+  ) => Promise<{
+    success: boolean;
+    lockId?: string;
+    expiresAtMs?: number;
+    error?: string;
+  }>;
+  onReleaseTicketLock?: (
+    ticketNumbers: string[],
+    lockId: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  onBookSingleTicket: (
+    ticketNum: string,
+    name: string,
+    phone: string,
+    options?: { lockId?: string; idempotencyKey?: string }
+  ) => Promise<{
+    success: boolean;
+    customerId?: string;
+    ticketNumbers?: string[];
+    error?: string;
+  } | void>;
+  onBookMultipleTickets: (
+    items: SelectedTicketItem[],
+    name: string,
+    phone: string,
+    options?: { lockId?: string; idempotencyKey?: string }
+  ) => Promise<{
+    success: boolean;
+    bookedCount?: number;
+    customerId?: string;
+    ticketNumbers?: string[];
+    error?: string;
+  } | void>;
   onOpenBookedTicketsDashboard: () => void;
   onOpenAvailableGallery: () => void;
   onExportRecords: () => void;
@@ -26,7 +100,16 @@ interface TicketInventoryHeaderProps {
 export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> = ({
   config,
   bookedTickets,
-  onBookSingleTicket,
+  activeLocks = [],
+  currentUserUid = '',
+  currentRole = 'employee',
+  inventoryTickets,
+  gridAppearance,
+  onAddTicketInventory,
+  onUpdateGridAppearance,
+  onAcquireTicketLock,
+  onRenewTicketLock,
+  onReleaseTicketLock,
   onBookMultipleTickets,
   onOpenBookedTicketsDashboard,
   onOpenAvailableGallery,
@@ -40,7 +123,17 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   const [singleHalf, setSingleHalf] = useState(false);
   const [singleFull, setSingleFull] = useState(true);
   const [customerName, setCustomerName] = useState('Sasikaran');
-  const [customerPhone, setCustomerPhone] = useState('99493119');
+  const [customerPhone, setCustomerPhone] = useState('9949311900');
+
+  // Lock tracking state for active booking form
+  const [activeLockId, setActiveLockId] = useState<string>('');
+  const [activeLockedTickets, setActiveLockedTickets] = useState<string[]>([]);
+  const [lockExpiresAtMs, setLockExpiresAtMs] = useState<number>(0);
+  const [lockRemainingSeconds, setLockRemainingSeconds] = useState<number>(0);
+  const [isAcquiringLock, setIsAcquiringLock] = useState<boolean>(false);
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
+  const [activeIdempotencyKey, setActiveIdempotencyKey] = useState<string>('');
+  const [bookingFormError, setBookingFormError] = useState<string | null>(null);
 
   // Multi-select
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -54,26 +147,256 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   );
 
   // Success / error popups
-  const [successTicket, setSuccessTicket] = useState<string | null>(null);
+  const [bookingConfirmation, setBookingConfirmation] =
+    useState<BookingConfirmationSummary | null>(null);
+  const [copiedCustomerId, setCopiedCustomerId] = useState(false);
   const [alreadyBookedNum, setAlreadyBookedNum] = useState<string | null>(null);
+  const [lockedByOtherMessage, setLockedByOtherMessage] = useState<string | null>(null);
 
   const activeColumn =
     LOTTERY_COLUMNS_SPEC.find((c) => c.id === selectedColumnId) || LOTTERY_COLUMNS_SPEC[0];
 
-  // 25 numbers for the active series column
-  const quickNumbers = Array.from({ length: 25 }, (_, i) =>
-    (activeColumn.startRange + i).toString().padStart(4, '0')
+  // Inventory & Appearance state
+  const [internalInventory, setInternalInventory] = useState<TicketInventoryItem[]>(() =>
+    lotteryService.getInventory(config.businessDate, undefined, currentRole)
+  );
+  const [appearance, setAppearance] = useState<GridAppearanceConfig>(
+    gridAppearance || lotteryService.getGridAppearance()
   );
 
+  useEffect(() => {
+    if (gridAppearance) {
+      setAppearance(gridAppearance);
+      setEditAppearance(gridAppearance);
+    }
+  }, [gridAppearance]);
+
+  useEffect(() => {
+    if (inventoryTickets && inventoryTickets.length > 0) {
+      setInternalInventory(inventoryTickets);
+    }
+  }, [inventoryTickets]);
+
+  // Admin Modals state
+  const [isAddTicketsModalOpen, setIsAddTicketsModalOpen] = useState(false);
+  const [isAppearanceModalOpen, setIsAppearanceModalOpen] = useState(false);
+  const [addMode, setAddMode] = useState<'single' | 'list' | 'range'>('range');
+  const [addSingleNumber, setAddSingleNumber] = useState('');
+  const [addCommaList, setAddCommaList] = useState('');
+  const [addRangeStart, setAddRangeStart] = useState('0001');
+  const [addRangeEnd, setAddRangeEnd] = useState('0025');
+  const [addPublishImmediately, setAddPublishImmediately] = useState(true);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [isAddingTickets, setIsAddingTickets] = useState(false);
+  const [editAppearance, setEditAppearance] = useState<GridAppearanceConfig>(appearance);
+
+  const allInventory = inventoryTickets && inventoryTickets.length > 0 ? inventoryTickets : internalInventory;
+
+  const confirmedSet = new Set<string>();
+  for (const b of bookedTickets) {
+    if (b.bookingStatus === 'Booked') {
+      confirmedSet.add(b.ticketNumber);
+    }
+  }
+
+  const pendingSet = new Set<string>();
+  for (const b of bookedTickets) {
+    if (b.bookingStatus === 'Pending Confirmation') {
+      pendingSet.add(b.ticketNumber);
+    }
+  }
+
   const isTicketBooked = (num: string) =>
-    bookedTickets.some((b) => b.ticketNumber === num && b.bookingStatus === 'Booked');
+    confirmedSet.has(num) ||
+    allInventory.some((inv) => inv.ticketNumber === num && inv.bookingStatus === 'Booked');
+
+  const isTicketPending = (num: string) =>
+    pendingSet.has(num) ||
+    allInventory.some((inv) => inv.ticketNumber === num && inv.bookingStatus === 'Pending Confirmation');
+
+  // Confirmed tickets MUST DISAPPEAR automatically from visible Ticket Grid!
+  // Remaining tickets move upward to fill empty spaces immediately.
+  const visibleTickets = allInventory
+    .filter((inv) => {
+      if (currentRole !== 'admin' && inv.status !== 'PUBLISHED') return false;
+      if (inv.bookingStatus === 'Booked' || confirmedSet.has(inv.ticketNumber)) return false;
+      return true;
+    })
+    .sort((a, b) => a.ticketNumber.localeCompare(b.ticketNumber, undefined, { numeric: true }));
+
+  const quickNumbers = visibleTickets.map((t) => t.ticketNumber);
+
+  const handleExecuteAddTickets = async () => {
+    setAddError(null);
+    let ticketsToAdd: string[] = [];
+    if (addMode === 'single') {
+      const norm = addSingleNumber.trim().padStart(4, '0');
+      if (!/^\d{4}$/.test(norm)) {
+        setAddError('Please enter a valid 4-digit ticket number (e.g. 0015).');
+        return;
+      }
+      ticketsToAdd = [norm];
+    } else if (addMode === 'list') {
+      const parts = addCommaList.split(/[\s,]+/).map((s) => s.trim().padStart(4, '0')).filter((s) => /^\d{4}$/.test(s));
+      if (parts.length === 0) {
+        setAddError('Please enter valid comma-separated 4-digit ticket numbers.');
+        return;
+      }
+      ticketsToAdd = Array.from(new Set(parts));
+    } else if (addMode === 'range') {
+      const s = parseInt(addRangeStart, 10);
+      const e = parseInt(addRangeEnd, 10);
+      if (isNaN(s) || isNaN(e) || s < 0 || e < s || (e - s) > 500) {
+        setAddError('Please enter a valid range (start <= end, max 500 tickets).');
+        return;
+      }
+      for (let i = s; i <= e; i++) {
+        ticketsToAdd.push(String(i).padStart(4, '0'));
+      }
+    }
+
+    const alreadyBooked = ticketsToAdd.filter((n) => isTicketBooked(n));
+    if (alreadyBooked.length > 0) {
+      setAddError(`Cannot add ticket(s) ${alreadyBooked.join(', ')} because they are already confirmed/booked.`);
+      return;
+    }
+
+    setIsAddingTickets(true);
+    try {
+      const status = addPublishImmediately ? 'PUBLISHED' : 'UNPUBLISHED';
+      if (onAddTicketInventory) {
+        const res = await onAddTicketInventory(
+          ticketsToAdd,
+          config.businessDate,
+          activeColumn.id,
+          config.seriesTitle,
+          status
+        );
+        if (res && !res.success) {
+          setAddError(res.error || 'Failed to add tickets.');
+          return;
+        }
+      } else {
+        lotteryService.addTicketInventory(
+          ticketsToAdd,
+          config.businessDate,
+          activeColumn.id,
+          config.seriesTitle,
+          status,
+          { id: currentUserUid || 'ADM001', name: 'Admin', role: 'admin' }
+        );
+      }
+      setInternalInventory(lotteryService.getInventory(config.businessDate, undefined, currentRole));
+      setIsAddTicketsModalOpen(false);
+      setAddSingleNumber('');
+      setAddCommaList('');
+    } finally {
+      setIsAddingTickets(false);
+    }
+  };
+
+  const handleSaveAppearance = async () => {
+    setAppearance(editAppearance);
+    if (onUpdateGridAppearance) {
+      await onUpdateGridAppearance(editAppearance);
+    } else {
+      lotteryService.updateGridAppearance(editAppearance, currentRole);
+    }
+    setIsAppearanceModalOpen(false);
+  };
+
+  const handleResetAppearance = () => {
+    setEditAppearance(DEFAULT_GRID_APPEARANCE);
+  };
+
+  const getTicketLock = (num: string): TicketLock | undefined => {
+    const nowMs = Date.now();
+    return activeLocks.find(
+      (l) => l.ticketNumber === num && l.status === 'LOCKED' && l.expiresAtMs > nowMs
+    );
+  };
+
+  // Countdown timer for active lock while booking modal is open
+  useEffect(() => {
+    if ((!activePopupTicket && !isMultiBookModalOpen) || !lockExpiresAtMs) {
+      setLockRemainingSeconds(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((lockExpiresAtMs - Date.now()) / 1000));
+      setLockRemainingSeconds(remaining);
+    };
+    updateCountdown();
+
+    const timer = setInterval(updateCountdown, 1000);
+    return () => clearInterval(timer);
+  }, [activePopupTicket, isMultiBookModalOpen, lockExpiresAtMs]);
+
+  // Automatic lock renewal every 5 seconds while user is actively completing the booking form
+  useEffect(() => {
+    if (
+      (!activePopupTicket && !isMultiBookModalOpen) ||
+      !activeLockId ||
+      activeLockedTickets.length === 0 ||
+      !onRenewTicketLock
+    ) {
+      return;
+    }
+
+    const renewInterval = setInterval(async () => {
+      if (Date.now() >= lockExpiresAtMs) return;
+      const res = await onRenewTicketLock(activeLockedTickets, activeLockId);
+      if (res?.success && res.expiresAtMs) {
+        setLockExpiresAtMs(res.expiresAtMs);
+      }
+    }, 5000);
+
+    return () => clearInterval(renewInterval);
+  }, [
+    activePopupTicket,
+    isMultiBookModalOpen,
+    activeLockId,
+    activeLockedTickets,
+    lockExpiresAtMs,
+    onRenewTicketLock,
+  ]);
+
+  const formatCountdown = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
 
   const getDefaultSetFlags = () => ({
     half: defaultSetType === 'half' || defaultSetType === 'both',
     full: defaultSetType === 'full' || defaultSetType === 'both',
   });
 
-  const handleTicketClick = (num: string) => {
+  const releaseCurrentModalLock = async () => {
+    const lockIdToRelease = activeLockId;
+    const ticketsToRelease = [...activeLockedTickets];
+    setActiveLockId('');
+    setActiveLockedTickets([]);
+    setLockExpiresAtMs(0);
+    setBookingFormError(null);
+
+    if (lockIdToRelease && ticketsToRelease.length > 0 && onReleaseTicketLock) {
+      await onReleaseTicketLock(ticketsToRelease, lockIdToRelease).catch(() => {});
+    }
+  };
+
+  const handleCloseSingleBookingModal = async () => {
+    setActivePopupTicket(null);
+    await releaseCurrentModalLock();
+  };
+
+  const handleCloseMultiBookingModal = async () => {
+    setIsMultiBookModalOpen(false);
+    await releaseCurrentModalLock();
+  };
+
+  const handleTicketClick = async (num: string) => {
     if (isMultiSelectMode) {
       handleToggleMultiSelect(num);
       return;
@@ -82,13 +405,65 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
       setAlreadyBookedNum(num);
       return;
     }
+
+    const existingLock = getTicketLock(num);
+    if (
+      existingLock &&
+      currentUserUid &&
+      existingLock.lockedByUid &&
+      existingLock.lockedByUid !== currentUserUid
+    ) {
+      setLockedByOtherMessage('This ticket is currently being booked by another user.');
+      return;
+    }
+
+    setBookingFormError(null);
+    if (onAcquireTicketLock) {
+      setIsAcquiringLock(true);
+      try {
+        const lockRes = await onAcquireTicketLock([num]);
+        if (!lockRes.success) {
+          if (lockRes.alreadyBooked) {
+            setAlreadyBookedNum(num);
+          } else {
+            setLockedByOtherMessage(
+              lockRes.lockedByOther
+                ? 'This ticket is currently being booked by another user.'
+                : lockRes.error || 'This ticket is currently being booked by another user.'
+            );
+          }
+          return;
+        }
+        setActiveLockId(lockRes.lockId || '');
+        setActiveLockedTickets([num]);
+        setLockExpiresAtMs(lockRes.expiresAtMs || Date.now() + 120000);
+      } finally {
+        setIsAcquiringLock(false);
+      }
+    } else {
+      setActiveLockId(`local-lock-${Date.now()}`);
+      setActiveLockedTickets([num]);
+      setLockExpiresAtMs(Date.now() + 120000);
+    }
+
     setSingleHalf(false);
     setSingleFull(true);
+    setActiveIdempotencyKey(`idem-${num}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     setActivePopupTicket(num);
   };
 
   const handleLongPress = (num: string) => {
     if (isTicketBooked(num)) return;
+    const existingLock = getTicketLock(num);
+    if (
+      existingLock &&
+      currentUserUid &&
+      existingLock.lockedByUid &&
+      existingLock.lockedByUid !== currentUserUid
+    ) {
+      setLockedByOtherMessage('This ticket is currently being booked by another user.');
+      return;
+    }
     setIsMultiSelectMode(true);
     if (!selectedMultiTickets.some((t) => t.ticketNumber === num)) {
       const flags = getDefaultSetFlags();
@@ -104,6 +479,16 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
       setAlreadyBookedNum(num);
       return;
     }
+    const existingLock = getTicketLock(num);
+    if (
+      existingLock &&
+      currentUserUid &&
+      existingLock.lockedByUid &&
+      existingLock.lockedByUid !== currentUserUid
+    ) {
+      setLockedByOtherMessage('This ticket is currently being booked by another user.');
+      return;
+    }
     if (selectedMultiTickets.some((t) => t.ticketNumber === num)) {
       const updated = selectedMultiTickets.filter((t) => t.ticketNumber !== num);
       setSelectedMultiTickets(updated);
@@ -116,29 +501,179 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
     }
   };
 
-  const handleConfirmSingleBook = () => {
-    if (!activePopupTicket) return;
-    if (!singleHalf && !singleFull) return;
-    onBookMultipleTickets(
-      [{ ticketNumber: activePopupTicket, half: singleHalf, full: singleFull }],
-      customerName,
-      customerPhone
+  const handleOpenMultiBookingModal = async () => {
+    if (selectedMultiTickets.length === 0) return;
+    const ticketNums = selectedMultiTickets.map((t) => t.ticketNumber);
+    setBookingFormError(null);
+
+    if (onAcquireTicketLock) {
+      setIsAcquiringLock(true);
+      try {
+        const lockRes = await onAcquireTicketLock(ticketNums);
+        if (!lockRes.success) {
+          setLockedByOtherMessage(
+            lockRes.lockedByOther
+              ? 'This ticket is currently being booked by another user.'
+              : lockRes.error || 'This ticket is currently being booked by another user.'
+          );
+          return;
+        }
+        setActiveLockId(lockRes.lockId || '');
+        setActiveLockedTickets(ticketNums);
+        setLockExpiresAtMs(lockRes.expiresAtMs || Date.now() + 120000);
+      } finally {
+        setIsAcquiringLock(false);
+      }
+    } else {
+      setActiveLockId(`local-lock-${Date.now()}`);
+      setActiveLockedTickets(ticketNums);
+      setLockExpiresAtMs(Date.now() + 120000);
+    }
+
+    setActiveIdempotencyKey(
+      `idem-multi-${ticketNums.join('-')}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     );
-    const bookedNum = activePopupTicket;
-    setActivePopupTicket(null);
-    setSuccessTicket(bookedNum);
+    setIsMultiBookModalOpen(true);
   };
 
-  const handleConfirmMultiBook = () => {
+  const handleReacquireExpiredLock = async (ticketsToLock: string[]) => {
+    if (!onAcquireTicketLock) return;
+    setBookingFormError(null);
+    setIsAcquiringLock(true);
+    try {
+      const lockRes = await onAcquireTicketLock(ticketsToLock);
+      if (!lockRes.success) {
+        setBookingFormError(
+          lockRes.lockedByOther
+            ? 'This ticket is currently being booked by another user.'
+            : lockRes.error || 'Could not re-lock ticket.'
+        );
+        return;
+      }
+      setActiveLockId(lockRes.lockId || '');
+      setActiveLockedTickets(ticketsToLock);
+      setLockExpiresAtMs(lockRes.expiresAtMs || Date.now() + 120000);
+    } finally {
+      setIsAcquiringLock(false);
+    }
+  };
+
+  const handleConfirmSingleBook = async () => {
+    if (!activePopupTicket) return;
+    if (!singleHalf && !singleFull) return;
+
+    if (lockExpiresAtMs > 0 && Date.now() >= lockExpiresAtMs) {
+      setBookingFormError(
+        'Your 120-second ticket lock has expired. Please click "Re-acquire Lock" before confirming.'
+      );
+      return;
+    }
+
+    setBookingFormError(null);
+    setIsSubmittingBooking(true);
+    try {
+      const bookedNum = activePopupTicket;
+      const res = await onBookMultipleTickets(
+        [{ ticketNumber: bookedNum, half: singleHalf, full: singleFull }],
+        customerName,
+        customerPhone,
+        {
+          lockId: activeLockId,
+          idempotencyKey: activeIdempotencyKey,
+        }
+      );
+
+      if (res && res.success === false) {
+        setBookingFormError(res.error || 'Failed to confirm booking.');
+        return;
+      }
+
+      const assignedCustomerId = (res && res.customerId) || '#5316';
+      setActivePopupTicket(null);
+      setActiveLockId('');
+      setActiveLockedTickets([]);
+      setLockExpiresAtMs(0);
+      setCopiedCustomerId(false);
+      setBookingConfirmation({
+        ticketNumbers: [bookedNum],
+        customerId: assignedCustomerId,
+        customerName: customerName.trim() || 'Walk-in Customer',
+        customerPhone: customerPhone.trim(),
+        totalAmount:
+          (singleHalf ? config.halfTicketPrice : 0) + (singleFull ? config.fullTicketPrice : 0),
+        bookedAt: new Date().toISOString(),
+      });
+    } finally {
+      setIsSubmittingBooking(false);
+    }
+  };
+
+  const handleConfirmMultiBook = async () => {
     if (selectedMultiTickets.length === 0) return;
+
+    if (lockExpiresAtMs > 0 && Date.now() >= lockExpiresAtMs) {
+      setBookingFormError(
+        'Your 120-second ticket lock has expired. Please click "Re-acquire Lock" before confirming.'
+      );
+      return;
+    }
+
     const validItems = selectedMultiTickets.map((t) =>
       !t.half && !t.full ? { ...t, full: true } : t
     );
-    onBookMultipleTickets(validItems, customerName, customerPhone);
-    setIsMultiBookModalOpen(false);
-    setIsMultiSelectMode(false);
-    setSelectedMultiTickets([]);
-    setSuccessTicket(`${validItems.length} Tickets`);
+
+    setBookingFormError(null);
+    setIsSubmittingBooking(true);
+    try {
+      const res = await onBookMultipleTickets(validItems, customerName, customerPhone, {
+        lockId: activeLockId,
+        idempotencyKey: activeIdempotencyKey,
+      });
+
+      if (res && res.success === false) {
+        setBookingFormError(res.error || 'Failed to confirm booking.');
+        return;
+      }
+
+      const assignedCustomerId = (res && res.customerId) || '#5316';
+      const bookedNums = validItems.map((i) => i.ticketNumber);
+      const totalAmount = validItems.reduce(
+        (sum, item) =>
+          sum +
+          (item.half ? config.halfTicketPrice : 0) +
+          (item.full ? config.fullTicketPrice : 0),
+        0
+      );
+
+      setIsMultiBookModalOpen(false);
+      setIsMultiSelectMode(false);
+      setSelectedMultiTickets([]);
+      setActiveLockId('');
+      setActiveLockedTickets([]);
+      setLockExpiresAtMs(0);
+      setCopiedCustomerId(false);
+      setBookingConfirmation({
+        ticketNumbers: bookedNums,
+        customerId: assignedCustomerId,
+        customerName: customerName.trim() || 'Walk-in Customer',
+        customerPhone: customerPhone.trim(),
+        totalAmount,
+        bookedAt: new Date().toISOString(),
+      });
+    } finally {
+      setIsSubmittingBooking(false);
+    }
+  };
+
+  const handleCopyCustomerId = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCustomerId(true);
+      setTimeout(() => setCopiedCustomerId(false), 2000);
+    } catch {
+      setCopiedCustomerId(true);
+      setTimeout(() => setCopiedCustomerId(false), 2000);
+    }
   };
 
   const trimmedSearch = searchQuery.trim();
@@ -157,19 +692,15 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">
                 {config.seriesTitle}
               </h2>
-              <span className="text-xs font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded border border-slate-200">
-                {activeColumn.rangeLabel}
-              </span>
             </div>
-            <div className="flex items-center space-x-2 text-xs text-slate-500 mt-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 mt-1">
               <Calendar className="w-3.5 h-3.5 text-slate-400" />
-              <span>Draw Date: <strong className="text-slate-700">{config.businessDate}</strong></span>
+              <span>
+                Draw Date: <strong className="text-slate-700">{config.businessDate}</strong>
+              </span>
               <span>•</span>
               <span>
-                Series Booked:{' '}
-                <strong className="text-slate-700">
-                  {quickNumbers.filter((n) => isTicketBooked(n)).length} / 25
-                </strong>
+                Available: <strong className="text-slate-700">{quickNumbers.length}</strong>
               </span>
               <span>•</span>
               <span>
@@ -179,6 +710,29 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
           </div>
 
           <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            {currentRole === 'admin' && (
+              <>
+                <button
+                  onClick={() => setIsAddTicketsModalOpen(true)}
+                  className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
+                  title="Add ticket numbers or ranges to inventory"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add Tickets</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setEditAppearance(appearance);
+                    setIsAppearanceModalOpen(true);
+                  }}
+                  className="px-3 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-200"
+                  title="Customize ticket grid appearance and colors"
+                >
+                  <Palette className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Colors</span>
+                </button>
+              </>
+            )}
             <button
               onClick={onExportRecords}
               className="px-3 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors border border-slate-200 flex items-center space-x-1.5"
@@ -188,9 +742,10 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
             </button>
 
             <button
+              disabled={isAcquiringLock}
               onClick={() => {
                 if (isMultiSelectMode && selectedMultiTickets.length > 0) {
-                  setIsMultiBookModalOpen(true);
+                  handleOpenMultiBookingModal();
                 } else {
                   setIsMultiSelectMode((prev) => !prev);
                   if (isMultiSelectMode) setSelectedMultiTickets([]);
@@ -222,28 +777,27 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
           </div>
         </div>
 
-        {/* Series Range Selector matching Available Sheet columns */}
-        <div className="pt-2.5 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto pb-1">
-          <span className="text-[11px] font-semibold text-slate-500 mr-1 shrink-0">
-            Series:
-          </span>
-          {LOTTERY_COLUMNS_SPEC.map((col) => {
-            const isActive = col.id === activeColumn.id;
-            return (
-              <button
-                key={col.id}
-                onClick={() => setSelectedColumnId(col.id)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold whitespace-nowrap transition-colors border shrink-0 ${
-                  isActive
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {col.rangeLabel}
-              </button>
-            );
-          })}
+                {/* Visual Ticket State Legend */}
+        <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-slate-600">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="inline-flex items-center space-x-1.5">
+              <span className="w-3.5 h-3.5 rounded border inline-block" style={{ backgroundColor: appearance.availableBg, borderColor: appearance.borderColor }} />
+              <span>Available</span>
+            </span>
+            <span className="inline-flex items-center space-x-1.5">
+              <span className="w-3.5 h-3.5 rounded border inline-block" style={{ backgroundColor: appearance.lockedBg, borderColor: appearance.borderColor }} />
+              <span>Locked (120s)</span>
+            </span>
+            <span className="inline-flex items-center space-x-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-amber-100 border border-amber-400 inline-block" />
+              <span>Pending Confirmation</span>
+            </span>
+            <span className="inline-flex items-center space-x-1 text-slate-400 italic">
+              <span>(Confirmed tickets automatically disappear from the grid)</span>
+            </span>
+          </div>
         </div>
+
       </div>
 
       {/* Multi-select Bar */}
@@ -323,11 +877,13 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               Cancel
             </button>
             <button
-              disabled={selectedMultiTickets.length === 0}
-              onClick={() => setIsMultiBookModalOpen(true)}
+              disabled={selectedMultiTickets.length === 0 || isAcquiringLock}
+              onClick={handleOpenMultiBookingModal}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold px-3.5 py-1.5 rounded-md transition-colors"
             >
-              Book Selected ({selectedMultiTickets.length})
+              {isAcquiringLock
+                ? 'Locking...'
+                : `Book Selected (${selectedMultiTickets.length})`}
             </button>
           </div>
         </div>
@@ -339,59 +895,129 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
           <div className="my-auto flex flex-col items-center justify-center py-6">
             {filteredNumbers.map((numStr) => {
               const booked = isTicketBooked(numStr);
+              const lockInfo = !booked ? getTicketLock(numStr) : undefined;
+              const isLocked = Boolean(lockInfo);
+
               return (
                 <div key={numStr} className="text-center">
                   <button
+                    disabled={isAcquiringLock}
                     onClick={() => handleTicketClick(numStr)}
-                    className={`w-36 h-24 rounded-xl flex items-center justify-center font-mono font-bold text-2xl transition-colors border ${
+                    className={`w-36 h-24 rounded-xl flex flex-col items-center justify-center font-mono font-bold text-2xl transition-colors border relative ${
                       booked
-                        ? 'bg-slate-900 text-white border-slate-900'
+                        ? 'bg-black text-white border-black'
+                        : isLocked
+                        ? 'bg-slate-400/45 text-slate-600 border-slate-400/70 backdrop-blur-[1px]'
                         : 'bg-white text-slate-900 border-slate-300 hover:border-blue-600'
                     }`}
                   >
-                    {numStr}
+                    {isLocked && (
+                      <Lock className="w-3.5 h-3.5 text-slate-600 mb-1" />
+                    )}
+                    <span>{numStr}</span>
                   </button>
                   <span className="text-xs font-medium text-slate-500 mt-2 block">
-                    {booked ? 'Status: Booked' : 'Click number to book'}
+                    {booked
+                      ? 'Status: Confirmed (Booked)'
+                      : isLocked
+                      ? 'Status: Temporarily Locked'
+                      : 'Status: Available — Click number to book'}
                   </span>
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="grid grid-cols-5 gap-2.5 sm:gap-3 my-auto max-w-2xl mx-auto w-full py-2">
-            {quickNumbers.map((numStr) => {
-              const booked = isTicketBooked(numStr);
-              const isSelected = selectedMultiTickets.some(
-                (t) => t.ticketNumber === numStr
-              );
-
-              return (
+          quickNumbers.length === 0 ? (
+            <div className="py-16 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300 p-8 my-auto max-w-md mx-auto w-full">
+              <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                <CheckSquare className="w-6 h-6" />
+              </div>
+              <p className="text-base font-bold text-slate-800">No Tickets in Grid</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                {currentRole === 'admin'
+                  ? 'No published tickets available. Click "+ Add Tickets" above to add individual numbers or a range.'
+                  : 'All published tickets have been confirmed, or no tickets are currently published for this series.'}
+              </p>
+              {currentRole === 'admin' && (
                 <button
-                  key={numStr}
-                  onClick={() => handleTicketClick(numStr)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    handleLongPress(numStr);
-                  }}
-                  className={`aspect-square max-w-[95px] mx-auto w-full rounded-xl flex flex-col items-center justify-center font-mono font-bold text-base sm:text-lg transition-colors select-none border relative ${
-                    booked
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : isSelected
-                      ? 'bg-blue-600 text-white border-blue-600 ring-2 ring-blue-200'
-                      : 'bg-white text-slate-900 hover:bg-slate-50 border-slate-200 shadow-2xs'
-                  }`}
+                  onClick={() => setIsAddTicketsModalOpen(true)}
+                  className="mt-4 inline-flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
                 >
-                  {isSelected && (
-                    <div className="absolute top-1.5 text-white">
-                      <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                    </div>
-                  )}
-                  <span className={isSelected ? 'mt-2' : ''}>{numStr}</span>
+                  <Plus className="w-4 h-4" />
+                  <span>+ Add Tickets</span>
                 </button>
-              );
-            })}
-          </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-5 gap-2.5 sm:gap-3 my-auto max-w-2xl mx-auto w-full py-2">
+              {quickNumbers.map((numStr) => {
+                const booked = isTicketBooked(numStr);
+                const lockInfo = !booked ? getTicketLock(numStr) : undefined;
+                const isLocked = Boolean(lockInfo);
+                const isLockedByOther = isLocked && lockInfo?.lockedByUid !== currentUserUid;
+                const isSelfLocked = activeLockedTickets.includes(numStr);
+                const isPending = isTicketPending(numStr);
+                const isSelected = selectedMultiTickets.some((t) => t.ticketNumber === numStr);
+
+                const tileStyle: React.CSSProperties = isSelfLocked
+                  ? { backgroundColor: '#dbeafe', borderColor: '#2563eb', color: '#1e40af' }
+                  : isLockedByOther
+                  ? {
+                      backgroundColor: appearance.lockedBg || 'rgba(148, 163, 184, 0.45)',
+                      borderColor: appearance.borderColor || '#cbd5e1',
+                      color: appearance.textColor || '#0f172a',
+                    }
+                  : isPending
+                  ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', color: '#92400e' }
+                  : isSelected
+                  ? { backgroundColor: '#2563eb', borderColor: '#2563eb', color: '#ffffff' }
+                  : {
+                      backgroundColor: appearance.availableBg || '#ffffff',
+                      borderColor: appearance.borderColor || '#cbd5e1',
+                      color: appearance.textColor || '#0f172a',
+                    };
+
+                return (
+                  <button
+                    key={numStr}
+                    disabled={isAcquiringLock || isPending}
+                    onClick={() => handleTicketClick(numStr)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      handleLongPress(numStr);
+                    }}
+                    style={tileStyle}
+                    title={
+                      isPending
+                        ? `Ticket #${numStr} — Pending Confirmation`
+                        : isLocked
+                        ? `Ticket #${numStr} — Temporarily locked`
+                        : `Ticket #${numStr} — Available`
+                    }
+                    className="aspect-square max-w-[95px] mx-auto w-full rounded-xl flex flex-col items-center justify-center font-mono font-bold text-base sm:text-lg transition-colors select-none border relative shadow-2xs"
+                  >
+                    {isSelected && !isLocked && !isPending && (
+                      <div className="absolute top-1.5 text-white">
+                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                      </div>
+                    )}
+                    {isLocked && (
+                      <div className="absolute top-1.5 text-slate-600">
+                        <Lock className="w-3 h-3" />
+                      </div>
+                    )}
+                    {isPending && (
+                      <div className="absolute top-1 text-[9px] font-sans font-bold bg-amber-500 text-white px-1.5 py-0.2 rounded">
+                        Pending
+                      </div>
+                    )}
+                    <span className={isSelected || isLocked || isPending ? 'mt-2' : ''}>{numStr}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )
         )}
       </div>
 
@@ -426,14 +1052,270 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
         </button>
       </div>
 
+
+      {/* Admin + Add Tickets Modal */}
+      {isAddTicketsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white w-full max-w-md rounded-xl shadow-lg border border-slate-200 p-5 flex flex-col max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Plus className="w-4 h-4 text-emerald-600" />
+                <span className="font-bold text-sm text-slate-900">+ Add Tickets to Inventory</span>
+              </div>
+              <button onClick={() => setIsAddTicketsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {addError && (
+              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center space-x-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{addError}</span>
+              </div>
+            )}
+
+            <div className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Draw Date & Series</label>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 font-mono text-slate-700 flex justify-between">
+                  <span>{config.businessDate}</span>
+                  <span className="font-bold text-blue-700">{config.seriesTitle}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1.5">Input Mode</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAddMode('range')}
+                    className={`py-1.5 rounded-lg font-semibold text-center border transition-colors ${
+                      addMode === 'range' ? 'bg-blue-50 border-blue-600 text-blue-700' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    Range
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddMode('single')}
+                    className={`py-1.5 rounded-lg font-semibold text-center border transition-colors ${
+                      addMode === 'single' ? 'bg-blue-50 border-blue-600 text-blue-700' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    Single
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddMode('list')}
+                    className={`py-1.5 rounded-lg font-semibold text-center border transition-colors ${
+                      addMode === 'list' ? 'bg-blue-50 border-blue-600 text-blue-700' : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    Comma List
+                  </button>
+                </div>
+              </div>
+
+              {addMode === 'range' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-600 mb-1 font-medium">Start Number</label>
+                    <input
+                      type="text"
+                      value={addRangeStart}
+                      onChange={(e) => setAddRangeStart(e.target.value)}
+                      placeholder="0001"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 mb-1 font-medium">End Number</label>
+                    <input
+                      type="text"
+                      value={addRangeEnd}
+                      onChange={(e) => setAddRangeEnd(e.target.value)}
+                      placeholder="0050"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono font-bold"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {addMode === 'single' && (
+                <div>
+                  <label className="block text-slate-600 mb-1 font-medium">Ticket Number (4 digits)</label>
+                  <input
+                    type="text"
+                    value={addSingleNumber}
+                    onChange={(e) => setAddSingleNumber(e.target.value)}
+                    placeholder="0015"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono font-bold text-base"
+                  />
+                </div>
+              )}
+
+              {addMode === 'list' && (
+                <div>
+                  <label className="block text-slate-600 mb-1 font-medium">Comma-Separated Ticket Numbers</label>
+                  <textarea
+                    rows={3}
+                    value={addCommaList}
+                    onChange={(e) => setAddCommaList(e.target.value)}
+                    placeholder="0001, 0005, 0012, 0025..."
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono text-xs"
+                  />
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={addPublishImmediately}
+                    onChange={(e) => setAddPublishImmediately(e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-0"
+                  />
+                  <span className="font-semibold text-slate-700">Publish immediately to Employee grids</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTicketsModalOpen(false)}
+                  className="py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isAddingTickets}
+                  onClick={handleExecuteAddTickets}
+                  className="py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold transition-colors shadow-xs"
+                >
+                  {isAddingTickets ? 'Adding...' : 'Save & Add Tickets'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Customize Appearance Modal */}
+      {isAppearanceModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white w-full max-w-sm rounded-xl shadow-lg border border-slate-200 p-5 flex flex-col">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Palette className="w-4 h-4 text-blue-600" />
+                <span className="font-bold text-sm text-slate-900">Customize Ticket Colors</span>
+              </div>
+              <button onClick={() => setIsAppearanceModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-700">Available Ticket Background</span>
+                <input
+                  type="color"
+                  value={editAppearance.availableBg || '#ffffff'}
+                  onChange={(e) => setEditAppearance({ ...editAppearance, availableBg: e.target.value })}
+                  className="w-8 h-8 rounded border border-slate-200 cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-700">Locked Ticket Background</span>
+                <input
+                  type="color"
+                  value={editAppearance.lockedBg || '#94a3b8'}
+                  onChange={(e) => setEditAppearance({ ...editAppearance, lockedBg: e.target.value })}
+                  className="w-8 h-8 rounded border border-slate-200 cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-700">Ticket Number Text Color</span>
+                <input
+                  type="color"
+                  value={editAppearance.textColor || '#0f172a'}
+                  onChange={(e) => setEditAppearance({ ...editAppearance, textColor: e.target.value })}
+                  className="w-8 h-8 rounded border border-slate-200 cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-700">Border Color</span>
+                <input
+                  type="color"
+                  value={editAppearance.borderColor || '#cbd5e1'}
+                  onChange={(e) => setEditAppearance({ ...editAppearance, borderColor: e.target.value })}
+                  className="w-8 h-8 rounded border border-slate-200 cursor-pointer"
+                />
+              </div>
+
+              {/* Live Preview Tile */}
+              <div className="pt-2 border-t border-slate-100 text-center">
+                <span className="text-[11px] font-semibold text-slate-400 block mb-2">Live Preview (Available Ticket)</span>
+                <div
+                  style={{
+                    backgroundColor: editAppearance.availableBg,
+                    borderColor: editAppearance.borderColor,
+                    color: editAppearance.textColor,
+                  }}
+                  className="w-20 h-20 rounded-xl mx-auto border flex items-center justify-center font-mono font-bold text-lg shadow-xs"
+                >
+                  0015
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={handleResetAppearance}
+                  className="py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors"
+                >
+                  Reset Defaults
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAppearance}
+                  className="py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold transition-colors shadow-xs"
+                >
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Single Ticket Booking Modal */}
       {activePopupTicket && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white w-full max-w-sm rounded-xl shadow-lg overflow-hidden border border-slate-200 p-5">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
-              <span className="font-bold text-sm text-slate-900">Book Ticket</span>
+            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-sm text-slate-900">Book Ticket</span>
+                <span
+                  className={`inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    lockRemainingSeconds > 0
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}
+                >
+                  <Clock className="w-3 h-3" />
+                  <span>
+                    {lockRemainingSeconds > 0
+                      ? `Locked ${formatCountdown(lockRemainingSeconds)}`
+                      : 'Lock Expired'}
+                  </span>
+                </span>
+              </div>
               <button
-                onClick={() => setActivePopupTicket(null)}
+                onClick={handleCloseSingleBookingModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-4 h-4" />
@@ -451,6 +1333,25 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                 {config.seriesTitle}
               </span>
             </div>
+
+            {bookingFormError && (
+              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex flex-col space-y-2">
+                <div className="flex items-start space-x-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{bookingFormError}</span>
+                </div>
+                {lockRemainingSeconds === 0 && (
+                  <button
+                    type="button"
+                    disabled={isAcquiringLock}
+                    onClick={() => handleReacquireExpiredLock([activePopupTicket])}
+                    className="self-start px-2.5 py-1 rounded bg-rose-700 text-white text-[11px] font-semibold hover:bg-rose-800"
+                  >
+                    {isAcquiringLock ? 'Locking...' : 'Re-acquire Lock'}
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="space-y-3 mb-4">
               <div>
@@ -505,7 +1406,9 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Customer Name</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Customer Name
+                </label>
                 <input
                   type="text"
                   value={customerName}
@@ -516,7 +1419,9 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Phone Number
+                </label>
                 <input
                   type="tel"
                   value={customerPhone}
@@ -527,12 +1432,22 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
             </div>
 
-            <button
-              onClick={handleConfirmSingleBook}
-              className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors"
-            >
-              Confirm Booking
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleCloseSingleBookingModal}
+                className="py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isSubmittingBooking}
+                onClick={handleConfirmSingleBook}
+                className="py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold text-xs transition-colors"
+              >
+                {isSubmittingBooking ? 'Submitting...' : currentRole === 'employee' ? 'Submit Booking Request' : 'Confirm Booking'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -542,16 +1457,55 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white w-full max-w-md rounded-xl shadow-lg overflow-hidden border border-slate-200 p-5 flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
-              <span className="font-bold text-sm text-slate-900">
-                Multi Ticket Booking ({selectedMultiTickets.length})
-              </span>
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-sm text-slate-900">
+                  Multi Ticket Booking ({selectedMultiTickets.length})
+                </span>
+                <span
+                  className={`inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    lockRemainingSeconds > 0
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}
+                >
+                  <Clock className="w-3 h-3" />
+                  <span>
+                    {lockRemainingSeconds > 0
+                      ? `Locked ${formatCountdown(lockRemainingSeconds)}`
+                      : 'Lock Expired'}
+                  </span>
+                </span>
+              </div>
               <button
-                onClick={() => setIsMultiBookModalOpen(false)}
+                onClick={handleCloseMultiBookingModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {bookingFormError && (
+              <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex flex-col space-y-2">
+                <div className="flex items-start space-x-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{bookingFormError}</span>
+                </div>
+                {lockRemainingSeconds === 0 && (
+                  <button
+                    type="button"
+                    disabled={isAcquiringLock}
+                    onClick={() =>
+                      handleReacquireExpiredLock(
+                        selectedMultiTickets.map((t) => t.ticketNumber)
+                      )
+                    }
+                    className="self-start px-2.5 py-1 rounded bg-rose-700 text-white text-[11px] font-semibold hover:bg-rose-800"
+                  >
+                    {isAcquiringLock ? 'Locking...' : 'Re-acquire Lock'}
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Quick Set Type Batch Buttons */}
             <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-3">
@@ -630,11 +1584,18 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                       </td>
                       <td className="py-1.5 px-2">
                         <button
-                          onClick={() => {
+                          onClick={async () => {
+                            if (activeLockId && onReleaseTicketLock) {
+                              await onReleaseTicketLock(
+                                [item.ticketNumber],
+                                activeLockId
+                              ).catch(() => {});
+                            }
                             const updated = selectedMultiTickets.filter(
                               (t) => t.ticketNumber !== item.ticketNumber
                             );
                             setSelectedMultiTickets(updated);
+                            setActiveLockedTickets(updated.map((t) => t.ticketNumber));
                             if (updated.length === 0) {
                               setIsMultiBookModalOpen(false);
                               setIsMultiSelectMode(false);
@@ -653,7 +1614,9 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
 
             <div className="space-y-3 mb-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Customer Name</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Customer Name
+                </label>
                 <input
                   type="text"
                   value={customerName}
@@ -663,7 +1626,9 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Phone Number
+                </label>
                 <input
                   type="tel"
                   value={customerPhone}
@@ -673,34 +1638,104 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleCloseMultiBookingModal}
+                className="py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isSubmittingBooking}
+                onClick={handleConfirmMultiBook}
+                className="py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold text-xs transition-colors"
+              >
+                {isSubmittingBooking
+                  ? 'Confirming...'
+                  : `Confirm Booking (${selectedMultiTickets.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Booking Recorded Confirmation Dialog with Unique Customer Serial Code */}
+      {bookingConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white w-full max-w-sm rounded-xl p-5 shadow-lg text-center border border-slate-200">
+            <div className="w-11 h-11 mx-auto mb-3 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center">
+              <Check className="w-5 h-5 stroke-[2.5]" />
+            </div>
+            <h3 className="font-bold text-base text-slate-900 mb-3">
+              Booking Recorded
+            </h3>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 mb-3 text-left space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-500">Ticket:</span>
+                <span className="font-mono font-bold text-sm text-slate-900">
+                  {bookingConfirmation.ticketNumbers.join(', ')}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200">
+                <span className="font-semibold text-slate-500">Customer ID:</span>
+                <div className="flex items-center space-x-2">
+                  <span className="font-mono font-bold text-sm text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                    {bookingConfirmation.customerId}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCustomerId(bookingConfirmation.customerId)}
+                    className="inline-flex items-center space-x-1 px-2 py-1 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold transition-colors"
+                    title="Copy Customer ID"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedCustomerId ? 'Copied!' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-4">
+              Ticket{' '}
+              <span className="font-bold font-mono text-slate-900">
+                {bookingConfirmation.ticketNumbers.join(', ')}
+              </span>{' '}
+              has been registered under Customer ID{' '}
+              <span className="font-bold font-mono text-slate-900">
+                {bookingConfirmation.customerId}
+              </span>
+              .
+            </p>
+
             <button
-              onClick={handleConfirmMultiBook}
-              className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors"
+              onClick={() => setBookingConfirmation(null)}
+              className="w-full py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors"
             >
-              Confirm Booking ({selectedMultiTickets.length})
+              Done
             </button>
           </div>
         </div>
       )}
 
-      {/* Booking Confirmed Dialog */}
-      {successTicket && (
+      {/* Locked By Another User Dialog */}
+      {lockedByOtherMessage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-          <div className="bg-white w-full max-w-xs rounded-xl p-5 shadow-lg text-center border border-slate-200">
-            <div className="w-11 h-11 mx-auto mb-3 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center">
-              <Check className="w-5 h-5 stroke-[2.5]" />
+          <div className="bg-white w-full max-w-xs rounded-xl p-5 shadow-lg text-center border border-slate-200 relative">
+            <div className="w-11 h-11 mx-auto mb-3 rounded-full bg-slate-100 text-slate-700 border border-slate-300 flex items-center justify-center">
+              <Lock className="w-5 h-5 stroke-[2.2]" />
             </div>
             <h3 className="font-bold text-sm text-slate-900 mb-1">
-              Booking Recorded
+              Ticket Temporarily Locked
             </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Ticket <span className="font-bold text-slate-800">{successTicket}</span> has been registered.
-            </p>
+            <p className="text-xs text-slate-600 mb-4">{lockedByOtherMessage}</p>
             <button
-              onClick={() => setSuccessTicket(null)}
+              onClick={() => setLockedByOtherMessage(null)}
               className="w-full py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors"
             >
-              Done
+              Close
             </button>
           </div>
         </div>

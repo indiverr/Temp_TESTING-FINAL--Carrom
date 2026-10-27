@@ -41,7 +41,12 @@ export const ConfigSettingsScreen: React.FC<ConfigSettingsScreenProps> = ({
     setTimeout(() => setSavedSuccess(false), 2000);
   };
 
-  const roleLabel = currentRole === 'paid_employee' ? 'Supervisor' : currentRole;
+  const roleLabel =
+    currentRole === 'paid_employee'
+      ? 'Paid Employee'
+      : currentRole === 'employee'
+      ? 'Employee'
+      : 'Admin';
 
   return (
     <div className="w-full max-w-3xl mx-auto flex flex-col space-y-5 select-none">

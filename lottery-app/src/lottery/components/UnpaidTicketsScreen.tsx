@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
   Search,
@@ -10,11 +10,15 @@ import {
   Layers,
   CheckCircle2,
   Clock,
+  Copy,
+  User,
 } from 'lucide-react';
 import { TicketBooking, LoginType } from '../types';
 
 interface UnpaidTicketsScreenProps {
   unpaidBookings: TicketBooking[];
+  pendingBookings?: TicketBooking[];
+  initialSearchQuery?: string;
   currentStaffName: string;
   currentRole: LoginType;
   onConfirmPayment: (
@@ -25,19 +29,33 @@ interface UnpaidTicketsScreenProps {
     notes?: string
   ) => void;
   onCancelBooking: (ticketNum: string, reason: string) => void;
+  onConfirmPendingBooking?: (bookingId: string) => Promise<any> | void;
   onBack: () => void;
 }
 
 export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
   unpaidBookings,
+  pendingBookings = [],
+  initialSearchQuery = '',
   currentStaffName,
   currentRole,
   onConfirmPayment,
   onCancelBooking,
+  onConfirmPendingBooking,
   onBack,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [queueTab, setQueueTab] = useState<'unpaid' | 'pending'>('unpaid');
+  const [confirmingBookingId, setConfirmingBookingId] = useState<string | null>(null);
+  const [confirmSuccessMsg, setConfirmSuccessMsg] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
   const [typeFilter, setTypeFilter] = useState<'all' | 'full' | 'half'>('all');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSearchQuery) {
+      setSearchQuery(initialSearchQuery);
+    }
+  }, [initialSearchQuery]);
 
   // Confirmation modal state
   const [selectedBookingForPay, setSelectedBookingForPay] = useState<TicketBooking | null>(null);
@@ -48,14 +66,33 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
   const [selectedBookingForCancel, setSelectedBookingForCancel] = useState<TicketBooking | null>(null);
   const [cancelReason, setCancelReason] = useState('Customer requested cancellation');
 
-  // Filtered bookings
+  const handleCopyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedId(code);
+      setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setCopiedId(code);
+      setTimeout(() => setCopiedId(null), 1800);
+    }
+  };
+
+  // Filtered bookings: search by Customer ID (#5316 or 5316), customer name, username, phone, or ticket #
   const filtered = unpaidBookings.filter((item) => {
     const q = searchQuery.trim().toLowerCase();
+    const qDigits = q.replace(/^#/, '');
+    const cid = String(item.customerId || '').toLowerCase();
+    const cidDigits = cid.replace(/^#/, '');
+    const bookedByUser = String(item.bookedByUsername || item.bookedBy || '').toLowerCase();
+
     const matchesSearch =
       !q ||
+      cid.includes(q) ||
+      (qDigits.length > 0 && cidDigits === qDigits) ||
       item.ticketNumber.toLowerCase().includes(q) ||
       item.customerName.toLowerCase().includes(q) ||
-      item.customerPhone.toLowerCase().includes(q);
+      item.customerPhone.toLowerCase().includes(q) ||
+      bookedByUser.includes(q);
 
     const matchesType =
       typeFilter === 'all' ||
@@ -79,7 +116,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
     if (!selectedBookingForPay) return;
 
     if (currentRole === 'employee') {
-      setPaymentError('Only Admin or Supervisor can confirm bookings.');
+      setPaymentError('Only Admin or Paid Employee can confirm bookings.');
       return;
     }
 
@@ -100,7 +137,12 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
     setSelectedBookingForCancel(null);
   };
 
-  const roleLabel = currentRole === 'paid_employee' ? 'Supervisor' : currentRole;
+  const roleLabel =
+    currentRole === 'paid_employee'
+      ? 'Paid Employee'
+      : currentRole === 'employee'
+      ? 'Employee'
+      : 'Admin';
 
   return (
     <div className="w-full flex flex-col space-y-5 select-none">
@@ -124,7 +166,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Review and confirm pending ticket bookings
+              Review and confirm pending ticket bookings by Customer ID, name, username, or contact
             </p>
           </div>
         </div>
@@ -190,7 +232,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by ticket number, customer name, or phone..."
+            placeholder="Search by Customer ID (#5316), customer name, username, phone, or ticket #..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900 font-medium text-slate-800"
@@ -222,13 +264,157 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
         </div>
       </div>
 
-      {/* Bookings Table */}
+      {/* Tab Switcher for Paid Employees and Admins */}
+      {(currentRole === 'paid_employee' || currentRole === 'admin') && (
+        <div className="flex border-b border-slate-200 gap-2 mb-3">
+          <button
+            onClick={() => setQueueTab('unpaid')}
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
+              queueTab === 'unpaid'
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <span>Unpaid Collection</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-700 font-mono font-bold border border-slate-200">
+              {unpaidBookings.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setQueueTab('pending')}
+            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
+              queueTab === 'pending'
+                ? 'border-amber-600 text-amber-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <span>Pending Confirmation Queue</span>
+            {pendingBookings.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-mono font-bold animate-pulse">
+                {pendingBookings.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {confirmSuccessMsg && (
+        <div className="mb-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center space-x-2">
+          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{confirmSuccessMsg}</span>
+        </div>
+      )}
+
+      {queueTab === 'pending' ? (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-amber-50/50">
+            <div>
+              <h3 className="font-bold text-sm text-slate-900">Pending Confirmation Queue</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Submitted by Employees awaiting Paid Employee validation & confirmation.
+              </p>
+            </div>
+            <span className="text-xs font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 rounded-full">
+              {pendingBookings.length} Pending
+            </span>
+          </div>
+
+          {pendingBookings.length === 0 ? (
+            <div className="py-12 text-center text-slate-400">
+              <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+              <p className="text-xs font-semibold text-slate-500">No pending confirmation requests</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">All employee booking requests have been processed.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4 text-center w-12">#</th>
+                    <th className="py-3 px-4">Customer ID</th>
+                    <th className="py-3 px-4">Customer Details</th>
+                    <th className="py-3 px-4 text-center">Ticket</th>
+                    <th className="py-3 px-4 text-center">Type</th>
+                    <th className="py-3 px-4 text-center">Amount</th>
+                    <th className="py-3 px-4 text-center">Submitted By</th>
+                    <th className="py-3 px-4 text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                  {pendingBookings.map((item, idx) => (
+                    <tr key={item.id} className="hover:bg-amber-50/30 transition-colors">
+                      <td className="py-3 px-4 text-slate-400 text-center">{idx + 1}</td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className="font-mono font-bold text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                          {item.customerId || '#5316'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-slate-900">{item.customerName}</div>
+                        <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
+                          <Phone className="w-3 h-3 text-slate-400" />
+                          <span>{item.customerPhone}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2.5 py-1 rounded border border-slate-200">
+                          #{item.ticketNumber}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        {item.halfSelected && (
+                          <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded mr-1">
+                            Half
+                          </span>
+                        )}
+                        {item.fullSelected && (
+                          <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                            Full
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-center font-bold text-slate-900 font-mono">
+                        ₹{item.totalAmount}
+                      </td>
+                      <td className="py-3 px-4 text-center text-xs text-slate-600">
+                        <div className="font-semibold text-slate-800">{item.bookedBy}</div>
+                        <div className="text-[10px] text-slate-400">{item.bookedAt}</div>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <button
+                          disabled={confirmingBookingId === item.id}
+                          onClick={async () => {
+                            if (!onConfirmPendingBooking) return;
+                            setConfirmingBookingId(item.id);
+                            try {
+                              await onConfirmPendingBooking(item.id);
+                              setConfirmSuccessMsg(`Confirmed Ticket #${item.ticketNumber} for ${item.customerName} (${item.customerId || '#5316'})`);
+                              setTimeout(() => setConfirmSuccessMsg(null), 3500);
+                            } finally {
+                              setConfirmingBookingId(null);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold shadow-xs transition-colors inline-flex items-center space-x-1"
+                        >
+                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                          <span>{confirmingBookingId === item.id ? 'Confirming...' : 'Confirm'}</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider whitespace-nowrap">
               <tr>
                 <th className="py-3 px-4 text-center">S.No</th>
+                <th className="py-3 px-4">Customer ID</th>
                 <th className="py-3 px-4">Customer</th>
                 <th className="py-3 px-4 text-center">Ticket #</th>
                 <th className="py-3 px-4 text-center">Set Type</th>
@@ -237,65 +423,95 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
-              {filtered.map((item, idx) => (
-                <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="py-3 px-4 text-slate-500 text-center">
-                    {idx + 1}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="font-semibold text-slate-900">{item.customerName}</div>
-                    {item.customerPhone && (
-                      <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        <span>{item.customerPhone}</span>
+              {filtered.map((item, idx) => {
+                const customerId = item.customerId || '#5101';
+                return (
+                  <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="py-3 px-4 text-slate-500 text-center">
+                      {idx + 1}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <div className="inline-flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery(customerId)}
+                          className="font-mono font-bold text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
+                          title="Show all bookings for this Customer ID"
+                        >
+                          {customerId}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(customerId)}
+                          className="p-1 text-slate-400 hover:text-slate-700 rounded"
+                          title="Copy Customer ID"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                        {copiedId === customerId && (
+                          <span className="text-[10px] font-bold text-emerald-600">Copied</span>
+                        )}
                       </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2.5 py-1 rounded border border-slate-200 inline-block">
-                      #{item.ticketNumber}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center space-x-1.5">
-                      {item.halfSelected && (
-                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
-                          Half Set
-                        </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="font-semibold text-slate-900">{item.customerName}</div>
+                      {item.customerPhone && (
+                        <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
+                          <Phone className="w-3 h-3 text-slate-400" />
+                          <span>{item.customerPhone}</span>
+                        </div>
                       )}
-                      {item.fullSelected && (
-                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
-                          Full Set
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <span className="px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                      Pending
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center space-x-2">
-                      <button
-                        onClick={() => handleOpenConfirm(item)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors flex items-center space-x-1"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Confirm</span>
-                      </button>
+                      <div className="text-slate-400 text-[11px] flex items-center space-x-1 mt-0.5">
+                        <User className="w-2.5 h-2.5" />
+                        <span>By: {item.bookedByUsername || item.bookedBy}</span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2.5 py-1 rounded border border-slate-200 inline-block">
+                        #{item.ticketNumber}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center space-x-1.5">
+                        {item.halfSelected && (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
+                            Half Set
+                          </span>
+                        )}
+                        {item.fullSelected && (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
+                            Full Set
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <span className="px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                        Pending
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center space-x-2">
+                        <button
+                          onClick={() => handleOpenConfirm(item)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors flex items-center space-x-1"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Confirm</span>
+                        </button>
 
-                      <button
-                        onClick={() => setSelectedBookingForCancel(item)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                        title="Cancel Booking"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <button
+                          onClick={() => setSelectedBookingForCancel(item)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          title="Cancel Booking"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -311,6 +527,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* Confirm Booking Modal */}
       {selectedBookingForPay && (
@@ -334,6 +551,12 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                   <span className="text-slate-500">Ticket Number:</span>
                   <span className="font-mono font-bold text-slate-900">
                     #{selectedBookingForPay.ticketNumber}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Customer ID:</span>
+                  <span className="font-mono font-bold text-blue-700">
+                    {selectedBookingForPay.customerId || '#5101'}
                   </span>
                 </div>
                 <div className="flex justify-between">

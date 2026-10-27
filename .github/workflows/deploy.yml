@@ -32,6 +32,16 @@ jobs:
 
       - name: Build frontend
         working-directory: ./lottery-app
+        env:
+          VITE_USE_FIREBASE_EMULATOR: 'false'
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: carrom-df56a.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: carrom-df56a
+          VITE_FIREBASE_STORAGE_BUCKET: carrom-df56a.firebasestorage.app
+          VITE_FIREBASE_STORAGE_ENABLED: 'false'
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '1036558671064'
+          VITE_FIREBASE_APP_ID: '1:1036558671064:web:2f0b406418fd960cc94bad'
+          VITE_OTP_APPS_SCRIPT_URL: ${{ secrets.VITE_OTP_APPS_SCRIPT_URL || vars.VITE_OTP_APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzi_-AgclOXjtA2suX_q280blKhTK-A6bsSJi5vfnbQ9Zjis5zV1yJ5nA_8S23plL3q/exec' }}
         run: npx tsc && npx vite build --base=/Temp_TESTING-FINAL--Carrom/
 
       - name: Upload Pages artifact

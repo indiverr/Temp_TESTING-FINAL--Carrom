@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
   Search,
@@ -11,11 +11,16 @@ import {
   FileCheck2,
   Filter,
   Layers,
+  Copy,
+  Hash,
+  User,
 } from 'lucide-react';
 import { TicketBooking, LoginType } from '../types';
 
 interface PaidTicketsScreenProps {
   paidBookings: TicketBooking[];
+  allBookings?: TicketBooking[];
+  initialSearchQuery?: string;
   currentStaffName?: string;
   currentRole: LoginType;
   onReversePayment: (ticketNum: string, reason: string) => void;
@@ -24,23 +29,51 @@ interface PaidTicketsScreenProps {
 
 export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
   paidBookings,
+  allBookings = [],
+  initialSearchQuery = '',
   currentRole,
   onReversePayment,
   onBack,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
   const [typeFilter, setTypeFilter] = useState<'all' | 'full' | 'half'>('all');
   const [inspectBooking, setInspectBooking] = useState<TicketBooking | null>(null);
   const [reversalReason, setReversalReason] = useState('');
   const [isReversing, setIsReversing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSearchQuery) {
+      setSearchQuery(initialSearchQuery);
+    }
+  }, [initialSearchQuery]);
+
+  const handleCopyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedId(code);
+      setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setCopiedId(code);
+      setTimeout(() => setCopiedId(null), 1800);
+    }
+  };
 
   const filtered = paidBookings.filter((item) => {
     const q = searchQuery.trim().toLowerCase();
+    const qDigits = q.replace(/^#/, '');
+    const cid = String(item.customerId || '').toLowerCase();
+    const cidDigits = cid.replace(/^#/, '');
+    const bookedByUser = String(item.bookedByUsername || item.bookedBy || '').toLowerCase();
+
     const matchesSearch =
       !q ||
+      cid.includes(q) ||
+      (qDigits.length > 0 && cidDigits === qDigits) ||
       item.ticketNumber.toLowerCase().includes(q) ||
       item.customerName.toLowerCase().includes(q) ||
-      item.customerPhone.toLowerCase().includes(q);
+      item.customerPhone.toLowerCase().includes(q) ||
+      bookedByUser.includes(q);
 
     const matchesType =
       typeFilter === 'all' ||
@@ -60,6 +93,15 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
     setReversalReason('');
     setIsReversing(false);
   };
+
+  const inspectCustomerBookings = inspectBooking
+    ? (allBookings.length > 0 ? allBookings : paidBookings).filter(
+        (b) =>
+          b.customerId &&
+          b.customerId === inspectBooking.customerId &&
+          b.bookingStatus === 'Booked'
+      )
+    : [];
 
   return (
     <div className="w-full flex flex-col space-y-5 select-none">
@@ -83,7 +125,7 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Verified and confirmed ticket bookings for the current draw
+              Verified ticket registrations with permanent Customer Serial Codes
             </p>
           </div>
         </div>
@@ -140,7 +182,7 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by ticket number, customer name, or phone..."
+            placeholder="Search by Customer ID (#5316), customer name, username, phone, or ticket #..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900 font-medium text-slate-800"
@@ -179,6 +221,7 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
             <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider whitespace-nowrap">
               <tr>
                 <th className="py-3 px-4 text-center">S.No</th>
+                <th className="py-3 px-4">Customer ID</th>
                 <th className="py-3 px-4">Customer</th>
                 <th className="py-3 px-4 text-center">Ticket #</th>
                 <th className="py-3 px-4 text-center">Set Type</th>
@@ -188,58 +231,88 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
-              {filtered.map((item, idx) => (
-                <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="py-3 px-4 text-slate-500 text-center">
-                    {idx + 1}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="font-semibold text-slate-900">{item.customerName}</div>
-                    {item.customerPhone && (
-                      <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        <span>{item.customerPhone}</span>
+              {filtered.map((item, idx) => {
+                const customerId = item.customerId || '#5101';
+                return (
+                  <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="py-3 px-4 text-slate-500 text-center">
+                      {idx + 1}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <div className="inline-flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery(customerId)}
+                          className="font-mono font-bold text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
+                          title="Filter all bookings for this Customer ID"
+                        >
+                          {customerId}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(customerId)}
+                          className="p-1 text-slate-400 hover:text-slate-700 rounded"
+                          title="Copy Customer ID"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                        {copiedId === customerId && (
+                          <span className="text-[10px] font-bold text-emerald-600">Copied</span>
+                        )}
                       </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2.5 py-1 rounded border border-slate-200 inline-block">
-                      #{item.ticketNumber}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center space-x-1.5">
-                      {item.halfSelected && (
-                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
-                          Half Set
-                        </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="font-semibold text-slate-900">{item.customerName}</div>
+                      {item.customerPhone && (
+                        <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
+                          <Phone className="w-3 h-3 text-slate-400" />
+                          <span>{item.customerPhone}</span>
+                        </div>
                       )}
-                      {item.fullSelected && (
-                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
-                          Full Set
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-center text-xs text-slate-500 whitespace-nowrap">
-                    {item.paidAt || item.bookedAt}
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <span className="px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      Confirmed
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center whitespace-nowrap">
-                    <button
-                      onClick={() => setInspectBooking(item)}
-                      className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors inline-flex items-center space-x-1"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>View</span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      <div className="text-slate-400 text-[11px] flex items-center space-x-1 mt-0.5">
+                        <User className="w-2.5 h-2.5" />
+                        <span>By: {item.bookedByUsername || item.bookedBy}</span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2.5 py-1 rounded border border-slate-200 inline-block">
+                        #{item.ticketNumber}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center space-x-1.5">
+                        {item.halfSelected && (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
+                            Half Set
+                          </span>
+                        )}
+                        {item.fullSelected && (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-xs">
+                            Full Set
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-center text-xs text-slate-500 whitespace-nowrap">
+                      {item.paidAt || item.bookedAt}
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <span className="px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        Confirmed
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
+                      <button
+                        onClick={() => setInspectBooking(item)}
+                        className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors inline-flex items-center space-x-1"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>View</span>
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -275,6 +348,22 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
 
             <div className="flex-1 overflow-y-auto space-y-4 text-xs">
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-semibold">Customer ID:</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="font-mono font-bold text-sm text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                      {inspectBooking.customerId || '#5101'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyCode(inspectBooking.customerId || '#5101')}
+                      className="p-1 rounded bg-white hover:bg-slate-100 border border-slate-200 text-slate-600"
+                      title="Copy Customer ID"
+                    >
+                      <Copy className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Customer:</span>
                   <span className="font-semibold text-slate-900">{inspectBooking.customerName}</span>
@@ -284,12 +373,42 @@ export const PaidTicketsScreen: React.FC<PaidTicketsScreenProps> = ({
                   <span className="font-medium text-slate-700">{inspectBooking.customerPhone}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-slate-500">Booked By:</span>
+                  <span className="font-medium text-slate-700">
+                    {inspectBooking.bookedByUsername || inspectBooking.bookedBy}
+                  </span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-slate-500">Ticket Type:</span>
                   <span className="font-semibold text-slate-800 uppercase">{inspectBooking.ticketType}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Confirmed At:</span>
                   <span className="text-slate-700">{inspectBooking.paidAt || inspectBooking.bookedAt}</span>
+                </div>
+              </div>
+
+              {/* All Bookings for this Customer ID */}
+              <div>
+                <span className="text-xs font-bold text-slate-800 block mb-2 flex items-center space-x-1.5">
+                  <Hash className="w-3.5 h-3.5 text-blue-600" />
+                  <span>
+                    All Bookings for Customer {inspectBooking.customerId || '#5101'} ({inspectCustomerBookings.length})
+                  </span>
+                </span>
+                <div className="flex flex-wrap gap-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                  {inspectCustomerBookings.map((b) => (
+                    <span
+                      key={b.id}
+                      className={`font-mono text-xs font-bold px-2 py-1 rounded border ${
+                        b.paymentStatus === 'Paid'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}
+                    >
+                      #{b.ticketNumber} ({b.paymentStatus})
+                    </span>
+                  ))}
                 </div>
               </div>
 

@@ -6,89 +6,211 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
+
+    // Enforce first-login 6-digit OTP verification from carromlotterydesk@gmail.com.
+    // Verified status can ONLY be set by the server (Google Apps Script Service Account or Cloud Functions)
+    // via custom token claim `otpVerified == true` or server-only `/users/{uid}` fields.
+    function isOtpVerified() {
+      return isAuthenticated() && (
+        request.auth.token.otpVerified == true ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.otpVerified == true &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.firstLoginCompleted == true
+        )
+      );
+    }
     
+    // Resolve role: checks server-signed custom claims first, falls back to server-managed /users/{uid}, defaults to 'employee'
     function getUserRole() {
-      return request.auth.token.role;
+      return request.auth.token.role != null
+        ? request.auth.token.role
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+            : 'employee');
     }
     
     function isAdmin() {
-      return isAuthenticated() && getUserRole() == 'admin';
+      return isOtpVerified() && getUserRole() == 'admin';
     }
     
     function isPaidEmployee() {
-      return isAuthenticated() && (getUserRole() == 'paid_employee' || getUserRole() == 'admin');
+      return isOtpVerified() && (getUserRole() == 'paid_employee' || getUserRole() == 'admin');
     }
     
     function isEmployee() {
-      return isAuthenticated() && (getUserRole() == 'employee' || getUserRole() == 'paid_employee' || getUserRole() == 'admin');
+      return isOtpVerified() && (getUserRole() == 'employee' || getUserRole() == 'paid_employee' || getUserRole() == 'admin');
     }
 
-    // 1. System Configuration: Read by authenticated users; update by Admin only
+    // 0A. Server-Only OTP Challenges (Never readable or writable by clients)
+    match /otpChallenges/{userId} {
+      allow read, write: if false;
+    }
+
+    // 0B. Server-Only Username Directory (Prevents public username-to-email enumeration)
+    match /userDirectory/{username} {
+      allow read, write: if false;
+    }
+
+    // 0C. Server-Only Booking Idempotency Store (Prevents duplicate bookings/codes on network retry)
+    match /bookingIdempotency/{idempotencyKey} {
+      allow read, write: if false;
+    }
+
+    // 0D. Customer Serial Code Registry & Customer Identity Records:
+    // - Readable by Admin and Paid Employee only (protects customer directory & PII from unprivileged enumeration).
+    //   Standard employees interact with customer IDs through the counter bookings screen and Apps Script backend.
+    // - Writable ONLY by the trusted backend (Apps Script Service Account); clients can never
+    //   create, alter, or impersonate customer serial codes (#XXXX).
+    match /customerCodes/{codeDigits} {
+      allow read: if isPaidEmployee();
+      allow write: if false;
+    }
+
+    match /customers/{customerKey} {
+      allow read: if isPaidEmployee();
+      allow write: if false;
+    }
+
+    // 0E. Real-Time Ticket Locks (/ticketLocks/{drawDateKey}_{ticketNumber}):
+    // - Readable in real time (onSnapshot) by all OTP-verified operators so locked tickets
+    //   immediately appear grey/transparent across all connected sessions.
+    // - Writable ONLY by the trusted backend so no client can forge, extend, or release
+    //   another user's lock.
+    match /ticketLocks/{lockDocId} {
+      allow read: if isOtpVerified();
+      allow write: if false;
+    }
+
+    // 1. System Configuration: Read by OTP-verified operators; update by Admin only
     match /config/{docId} {
-      allow read: if isAuthenticated();
+      allow read: if isOtpVerified();
       allow write: if isAdmin();
     }
 
-    // 2. User Profiles & Role Records: Read own profile or Admin; write by Admin only
+    // 2. User Profiles & Role Records:
+    // - Unverified users cannot read `/users/{userId}`.
+    // - Verified non-admin users can `get` ONLY their own `/users/{uid}` document and cannot `list` other users.
+    // - All client writes to `/users/{userId}` are blocked (`allow write: if false;`); user roles and
+    //   `otpVerified` flags are managed exclusively by the server (Apps Script Service Account / Firebase Console).
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow write: if isAdmin();
+      allow get: if isOtpVerified() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow write: if false;
     }
 
     // 3. Deterministic Ticket Reservations: /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber}
     match /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber} {
-      allow read: if isAuthenticated();
-      // Only authenticated employees can reserve available tickets
-      allow create: if isEmployee() 
-        && request.resource.data.ticketNumber == ticketNumber
-        && request.resource.data.drawDate == drawDate
-        && request.resource.data.bookingStatus == 'Booked';
-      // Tickets can never be directly updated or deleted by clients; cancellations route via Cloud Functions/Admin
+      allow read: if isOtpVerified();
+      // Ticket confirmations are created exclusively by the trusted Apps Script backend (Service Account).
+      // Direct client creation is blocked so the 120-second ticket locking and atomic validation cannot be bypassed.
+      allow create: if false;
+      // Ticket locks and confirmed reservations can never be arbitrarily modified
       allow update: if false;
-      allow delete: if false;
+      // Admin or Paid Employee can release ticket reservation upon cancellation
+      allow delete: if isPaidEmployee();
+    }
+
+    // 3B. Admin-Controlled Ticket Inventory (/ticketInventory/{drawKey}_{seriesId}_{ticketNumber})
+    match /ticketInventory/{inventoryId} {
+      allow read: if isOtpVerified() && (isAdmin() || resource.data.status == 'PUBLISHED');
+      allow write: if isAdmin();
     }
 
     // 4. Bookings Collection
     match /bookings/{bookingId} {
-      allow read: if isAuthenticated();
-      allow create: if isEmployee() 
-        && request.resource.data.bookingStatus == 'Booked'
-        && request.resource.data.paymentStatus == 'Unpaid';
-      // Financial balance updates permitted only for Paid Employee or Admin with ledger validation
+      // Mandatory Employee privacy: Employees can only read their own private bookings. Admin and Paid Employee can read all.
+      allow read: if isOtpVerified() && (
+        isAdmin() ||
+        isPaidEmployee() ||
+        resource.data.bookedByUid == request.auth.uid
+      );
+      // Confirmed bookings are created exclusively by the trusted Apps Script backend (Service Account).
+      // Direct client creation is blocked to enforce 120-second ticket locks and atomic customer code assignment.
+      allow create: if false;
+      // Financial balance updates, Paid Employee confirmations, and cancellations permitted for Paid Employee or Admin;
+      // customerId and ticketNumber are strictly immutable and must conform to ^#[0-9]{4,8}$.
+      // Reversing or cancelling an already-Paid ticket is strictly Admin-only.
+      // Balance and payment status are kept mathematically consistent with amountPaid and totalAmount.
       allow update: if isPaidEmployee()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['amountPaid', 'remainingBalance', 'paymentStatus', 'paymentRef', 'paidBy', 'paidAt', 'history'])
-        && request.resource.data.amountPaid <= resource.data.totalAmount
-        && request.resource.data.remainingBalance == resource.data.totalAmount - request.resource.data.amountPaid;
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.customerId.matches('^#[0-9]{4,8}$')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'amountPaid', 'remainingBalance', 'paymentStatus', 'paymentRef', 
+          'paidBy', 'paidAt', 'history', 'bookingStatus', 'cancellationReason', 
+          'cancelledAt', 'cancelledBy', 'cancelledByRole',
+          'confirmedAt', 'confirmedBy', 'confirmedByUid', 'confirmedByRole'
+        ])
+        && (
+          (resource.data.bookingStatus == 'Pending Confirmation' && request.resource.data.bookingStatus == 'Booked')
+            ? true
+            : (
+                request.resource.data.amountPaid >= resource.data.amountPaid
+                && request.resource.data.amountPaid <= resource.data.totalAmount
+                && (
+                  request.resource.data.bookingStatus == 'Cancelled'
+                    ? (resource.data.paymentStatus == 'Paid' ? isAdmin() : true)
+                    : (
+                        request.resource.data.remainingBalance == (resource.data.totalAmount - request.resource.data.amountPaid) &&
+                        request.resource.data.paymentStatus == (request.resource.data.remainingBalance == 0 ? 'Paid' : 'Partial')
+                      )
+                )
+              )
+        );
       allow delete: if false;
     }
 
     // 5. Append-Only Payments Collection
     match /payments/{paymentId} {
-      allow read: if isAuthenticated();
-      // Only Paid Employee or Admin can record payments
+      allow read: if isPaidEmployee();
+      // Only Paid Employee or Admin can record payments with strict field whitelist, mandatory booking link, and identity matching
       allow create: if isPaidEmployee()
+        && request.resource.data.keys().hasOnly([
+          'ticketNumber', 'drawDate', 'customerName', 'amount', 
+          'paymentMethod', 'paymentRef', 'paymentStatus', 
+          'confirmedBy', 'confirmedByUid', 'role', 'createdAt', 'bookingId'
+        ])
+        && request.resource.data.amount is number
         && request.resource.data.amount > 0
-        && request.resource.data.paymentStatus in ['Partial', 'Paid'];
+        && request.resource.data.paymentStatus in ['Partial', 'Paid']
+        && request.resource.data.role == getUserRole()
+        && ('confirmedByUid' in request.resource.data)
+        && request.resource.data.confirmedByUid == request.auth.uid
+        && request.resource.data.ticketNumber is string
+        && request.resource.data.drawDate is string
+        // Mandatory booking association: payment cannot exist without an active Booked record
+        && ('bookingId' in request.resource.data)
+        && request.resource.data.bookingId is string
+        && request.resource.data.bookingId.size() > 0
+        && exists(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId))
+        && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.ticketNumber == request.resource.data.ticketNumber
+        && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.date == request.resource.data.drawDate
+        && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.customerName == request.resource.data.customerName
+        && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.bookingStatus == 'Booked'
+        && request.resource.data.amount <= get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.remainingBalance;
       // Financial history is strictly immutable: no client edits or deletes allowed
       allow update, delete: if false;
     }
 
-    // 6. Append-Only Audit Trail Collection
+    // 6. Append-Only Audit Trail Collection (Server/Console-read only; clients cannot read audit logs)
     match /auditEvents/{eventId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated();
+      allow read: if false;
+      allow create: if isEmployee()
+        && request.resource.data.action == 'BOOKING_BATCH_CREATED'
+        && request.resource.data.ticketCount is int
+        && request.resource.data.ticketCount > 0;
       allow update, delete: if false;
     }
 
     // 7. Today Winner Records
     match /winners/{winnerId} {
-      allow read: if isAuthenticated();
+      allow read: if isOtpVerified();
       allow write: if isAdmin();
     }
 
     // 8. Result Papers
     match /resultPapers/{paperId} {
-      allow read: if isAuthenticated();
+      allow read: if isOtpVerified();
       allow write: if isAdmin();
     }
   }

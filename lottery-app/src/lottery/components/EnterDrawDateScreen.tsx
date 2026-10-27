@@ -16,7 +16,11 @@ export const EnterDrawDateScreen: React.FC<EnterDrawDateScreenProps> = ({
   const [selectedDate, setSelectedDate] = useState('02 Oct 2026');
 
   const roleLabel =
-    currentStaff.role === 'paid_employee' ? 'Supervisor' : currentStaff.role;
+    currentStaff.role === 'paid_employee'
+      ? 'Paid Employee'
+      : currentStaff.role === 'employee'
+      ? 'Employee'
+      : 'Admin';
 
   return (
     <div className="w-full max-w-xl mx-auto my-auto flex flex-col space-y-5 select-none p-4 sm:p-6">

@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "deploy": "netlify deploy --prod --dir=dist",
+    "test:otp": "node test/otpIntegrationTests.cjs",
     "test:emulators": "node test/runEmulatorTests.cjs"
   },
   "dependencies": {

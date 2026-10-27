@@ -13,12 +13,12 @@ const admin = require('../functions/node_modules/firebase-admin');
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 process.env.FIREBASE_STORAGE_EMULATOR_HOST = '127.0.0.1:9199';
-process.env.GCLOUD_PROJECT = 'carrom-lottery-demo';
+process.env.GCLOUD_PROJECT = 'demo-carrom-lottery';
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    projectId: 'carrom-lottery-demo',
-    storageBucket: 'carrom-lottery-demo.appspot.com',
+    projectId: 'demo-carrom-lottery',
+    storageBucket: 'demo-carrom-lottery.appspot.com',
   });
 }
 
@@ -40,7 +40,7 @@ async function callCloudFunction(funcName, data, idToken) {
   const headers = { 'Content-Type': 'application/json' };
   if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
 
-  const res = await fetch(`http://127.0.0.1:5001/carrom-lottery-demo/us-central1/${funcName}`, {
+  const res = await fetch(`http://127.0.0.1:5001/demo-carrom-lottery/us-central1/${funcName}`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ data }),

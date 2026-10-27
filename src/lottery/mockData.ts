@@ -3,8 +3,8 @@ import { LotterySeriesColumn, TicketBooking, EmployeeProfile } from './types';
 export const INITIAL_DATE = '02 Oct 2026';
 
 export const INITIAL_STAFF: EmployeeProfile[] = [
-  { id: 'ADM001', name: 'Super Admin', phone: '9999999999', role: 'admin' },
-  { id: 'EMP001', name: 'Sasikaran', phone: '9949311900', role: 'employee' },
+  { id: 'ADM001', name: 'Sasikaran', phone: '9949311900', role: 'admin' },
+  { id: 'EMP001', name: 'Ravi Kumar', phone: '9845123400', role: 'employee' },
   { id: 'EMP002', name: 'Hariharan', phone: '9845123456', role: 'employee' },
   { id: 'PEM001', name: 'Gogul', phone: '9765432109', role: 'paid_employee' },
 ];

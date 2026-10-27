@@ -11,18 +11,20 @@ import {
   Mail,
 } from 'lucide-react';
 import { LOTTERY_COLUMNS_SPEC } from '../mockData';
-import { TicketBooking } from '../types';
+import { TicketBooking, TicketLock } from '../types';
 
 interface AvailableTicketsGalleryModalProps {
   isOpen: boolean;
   onClose: () => void;
   bookedTickets: TicketBooking[];
+  activeLocks?: TicketLock[];
 }
 
 export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModalProps> = ({
   isOpen,
   onClose,
   bookedTickets,
+  activeLocks = [],
 }) => {
   const [isShareSheetOpen, setIsShareSheetOpen] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -30,9 +32,15 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
   if (!isOpen) return null;
 
   const rowCount = 25;
+  const nowMs = Date.now();
 
   const isNumberBooked = (numStr: string) =>
     bookedTickets.some((b) => b.ticketNumber === numStr && b.bookingStatus === 'Booked');
+
+  const isNumberLocked = (numStr: string) =>
+    activeLocks.some(
+      (l) => l.ticketNumber === numStr && l.status === 'LOCKED' && l.expiresAtMs > nowMs
+    );
 
   const handleDownload = () => {
     setDownloadSuccess(true);
@@ -122,15 +130,31 @@ export const AvailableTicketsGalleryModal: React.FC<AvailableTicketsGalleryModal
                     const numberVal = col.startRange + rowIndex;
                     const numStr = numberVal.toString().padStart(4, '0');
                     const isBooked = isNumberBooked(numStr);
+                    const isLocked = !isBooked && isNumberLocked(numStr);
 
                     return (
                       <td
                         key={col.id}
                         style={{
-                          color: isBooked ? '#ffffff' : col.textColor,
-                          backgroundColor: isBooked ? '#000000' : '#ffffff',
+                          color: isBooked
+                            ? '#ffffff'
+                            : isLocked
+                            ? '#475569'
+                            : col.textColor,
+                          backgroundColor: isBooked
+                            ? '#000000'
+                            : isLocked
+                            ? 'rgba(148, 163, 184, 0.45)'
+                            : '#ffffff',
                         }}
                         className="p-1.5 border border-slate-200 font-bold text-[11px] whitespace-nowrap"
+                        title={
+                          isBooked
+                            ? `Ticket #${numStr} — Confirmed`
+                            : isLocked
+                            ? `Ticket #${numStr} — Temporarily locked`
+                            : `Ticket #${numStr} — Available`
+                        }
                       >
                         {isBooked ? '-' : numStr}
                       </td>
