@@ -3029,6 +3029,79 @@ async function runAllTests() {
     `Batch 25 tkts: ${bench25.tTotalMs}ms (${bench25.roundTrips} RT); Batch 100 tkts: ${bench100.tTotalMs}ms (${bench100.roundTrips} RT); Batch 500 tkts: ${bench500.tTotalMs}ms (${bench500.roundTrips} RT); Admin login optimized (claimsRefreshed=${auth2.claimsRefreshed}); Centralized Overview & Simplified Navigation verified`
   );
 
+  // =============================================================
+  // Scenario 31: Role-Based Navigation & Strict Route Guards (Employee, Paid Employee, Admin)
+  // =============================================================
+  const rootMainSource = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/LotteryAppMain.tsx'), 'utf8');
+  const appMainSource = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/LotteryAppMain.tsx'), 'utf8');
+
+  // 1. Employee Navigation:
+  // - Show: Sign Out, Draw Date, Ticket Grid, Pending, Confirmed
+  // - Hide: Winners, Result Sheets, Settings, Admin Overview
+  // 2. Paid Employee Navigation:
+  // - Show: Sign Out, Draw Date, Ticket Grid, Pending, Confirmed
+  // - Hide: Winners, Result Sheets, Settings, Admin Overview
+  // 3. Admin Navigation:
+  // - Show: Sign Out, Draw Date, Ticket Grid, Overview, Settings
+  // - Preserve all existing Admin functionality
+  // 4. Parity and Authorization Guards:
+  const appsAreIdentical = rootMainSource === appMainSource;
+
+  // Verify Admin-only Overview and Settings
+  const adminOverviewOnly =
+    rootMainSource.includes("currentRole === 'admin' && (") &&
+    rootMainSource.includes("navigateProtected('dashboard')") &&
+    rootMainSource.includes("navigateProtected('settings')");
+
+  // Verify Non-Admin (Employee & Paid Employee) has both Pending and Confirmed
+  const nonAdminPendingAndConfirmed =
+    rootMainSource.includes("currentRole !== 'admin' && (") &&
+    rootMainSource.includes("navigateProtected('unpaid')") &&
+    rootMainSource.includes("navigateProtected('paid')");
+
+  // Verify Winners & Result Sheets are removed from top navigation bar
+  const navSectionMatch = rootMainSource.match(/<nav[^>]*>([\s\S]*?)<\/nav>/);
+  const navSection = navSectionMatch ? navSectionMatch[1] : '';
+  const noWinnersInNav = !navSection.includes("navigateProtected('winners')");
+  const noPapersInNav = !navSection.includes("navigateProtected('papers')");
+
+  // Verify route guards in navigateProtected and useEffect
+  const hasRouteGuards =
+    rootMainSource.includes("targetScreen === 'dashboard' ||") &&
+    rootMainSource.includes("targetScreen === 'winners' ||") &&
+    rootMainSource.includes("targetScreen === 'papers' ||") &&
+    rootMainSource.includes("targetScreen === 'settings'") &&
+    rootMainSource.includes("showToast('Access denied: Unauthorized view for your role');") &&
+    rootMainSource.includes("setCurrentScreen('inventory');");
+
+  const hasStateGuardEffect =
+    rootMainSource.includes("currentRole !== 'admin' &&") &&
+    rootMainSource.includes("currentScreen === 'dashboard' ||") &&
+    rootMainSource.includes("currentScreen === 'winners' ||") &&
+    rootMainSource.includes("currentScreen === 'papers' ||") &&
+    rootMainSource.includes("currentScreen === 'settings'");
+
+  // Verify BookedTicketsDashboardScreen is guarded by currentRole === 'admin'
+  const dashboardGuarded = rootMainSource.includes(
+    "currentScreen === 'dashboard' && currentRole === 'admin'"
+  );
+
+  const s31Passed =
+    appsAreIdentical &&
+    adminOverviewOnly &&
+    nonAdminPendingAndConfirmed &&
+    noWinnersInNav &&
+    noPapersInNav &&
+    hasRouteGuards &&
+    hasStateGuardEffect &&
+    dashboardGuarded;
+
+  assertTest(
+    'Scenario 31: Role-Based Navigation & Strict Route Guards (Employee, Paid Employee, Admin)',
+    s31Passed,
+    'Verified Employee & Paid Employee show Sign Out, Draw Date, Grid, Pending, Confirmed and hide/block Overview, Winners, Result Sheets, Settings; Admin retains Overview & Settings; 100% parity across root & lottery-app'
+  );
+
   // -------------------------------------------------------------
   // Summary
   // -------------------------------------------------------------

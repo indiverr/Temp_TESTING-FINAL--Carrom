@@ -203,6 +203,20 @@ export const LotteryAppMain: React.FC = () => {
     return () => unsubLocal();
   }, [isLiveFirebaseMode, config.businessDate]);
 
+  // Guard against unauthorized screen states for non-admin roles
+  useEffect(() => {
+    if (
+      isAuthenticatedAndVerified &&
+      currentRole !== 'admin' &&
+      (currentScreen === 'dashboard' ||
+        currentScreen === 'winners' ||
+        currentScreen === 'papers' ||
+        currentScreen === 'settings')
+    ) {
+      setCurrentScreen('inventory');
+    }
+  }, [isAuthenticatedAndVerified, currentRole, currentScreen]);
+
   const navigateProtected = (
     targetScreen:
       | 'login'
@@ -227,6 +241,33 @@ export const LotteryAppMain: React.FC = () => {
       setCurrentScreen('login');
       return;
     }
+
+    // Role-based route authorization guards
+    if (currentRole !== 'admin') {
+      // Employee & Paid Employee cannot access Admin Overview, Winners, Result Sheets, or Settings
+      if (
+        targetScreen === 'dashboard' ||
+        targetScreen === 'winners' ||
+        targetScreen === 'papers' ||
+        targetScreen === 'settings'
+      ) {
+        showToast('Access denied: Unauthorized view for your role');
+        setCurrentScreen('inventory');
+        return;
+      }
+    } else {
+      // Admin: Legacy sub-screens route centrally into Overview
+      if (
+        targetScreen === 'unpaid' ||
+        targetScreen === 'paid' ||
+        targetScreen === 'winners' ||
+        targetScreen === 'papers'
+      ) {
+        setCurrentScreen('dashboard');
+        return;
+      }
+    }
+
     setCurrentScreen(targetScreen);
   };
 
@@ -835,40 +876,41 @@ export const LotteryAppMain: React.FC = () => {
             >
               Ticket Grid
             </button>
-            <button
-              onClick={() => navigateProtected('dashboard')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentScreen === 'dashboard'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              Overview
-            </button>
-            {/* Non-Admin Sub-Screens (Admins access these centrally via Overview) */}
-            {currentRole !== 'admin' && (
+            {/* Admin Overview (Admin only) */}
+            {currentRole === 'admin' && (
               <button
-                onClick={() => navigateProtected('unpaid')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
-                  currentScreen === 'unpaid'
+                onClick={() => navigateProtected('dashboard')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  currentScreen === 'dashboard'
                     ? 'bg-slate-900 text-white'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
-                <span>Pending</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                    currentScreen === 'unpaid'
-                      ? 'bg-white/20 text-white'
-                      : 'bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {unpaidList.length}
-                </span>
+                Overview
               </button>
             )}
-            {currentRole === 'paid_employee' && (
+            {/* Non-Admin Tabs: Pending and Confirmed (Both Employee and Paid Employee) */}
+            {currentRole !== 'admin' && (
               <>
+                <button
+                  onClick={() => navigateProtected('unpaid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
+                    currentScreen === 'unpaid'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>Pending</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                      currentScreen === 'unpaid'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {unpaidList.length}
+                  </span>
+                </button>
                 <button
                   onClick={() => navigateProtected('paid')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
@@ -888,29 +930,10 @@ export const LotteryAppMain: React.FC = () => {
                     {paidList.length}
                   </span>
                 </button>
-                <button
-                  onClick={() => navigateProtected('winners')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    currentScreen === 'winners'
-                      ? 'bg-slate-900 text-white'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                  }`}
-                >
-                  Winners
-                </button>
-                <button
-                  onClick={() => navigateProtected('papers')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    currentScreen === 'papers'
-                      ? 'bg-slate-900 text-white'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                  }`}
-                >
-                  Result Sheets
-                </button>
               </>
             )}
-            {(currentRole === 'admin' || currentRole === 'paid_employee') && (
+            {/* Admin Settings (Admin only) */}
+            {currentRole === 'admin' && (
               <button
                 onClick={() => navigateProtected('settings')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1005,12 +1028,14 @@ export const LotteryAppMain: React.FC = () => {
                   onReleaseTicketLock={handleReleaseTicketLock}
                   onBookSingleTicket={handleBookSingleTicket}
                   onBookMultipleTickets={handleBookMultipleTickets}
-                  onOpenBookedTicketsDashboard={() => setCurrentScreen('dashboard')}
+                  onOpenBookedTicketsDashboard={() =>
+                    navigateProtected(currentRole === 'admin' ? 'dashboard' : 'unpaid')
+                  }
                   onOpenAvailableGallery={() => setIsGalleryOpen(true)}
                   onExportRecords={handleExportRecords}
                 />
               )}
-              {isAuthenticatedAndVerified && currentScreen === 'dashboard' && (
+              {isAuthenticatedAndVerified && currentScreen === 'dashboard' && currentRole === 'admin' && (
                 <BookedTicketsDashboardScreen
                   config={config}
                   allBookings={allBookings}
@@ -1034,11 +1059,11 @@ export const LotteryAppMain: React.FC = () => {
                   onUploadPaper={handleUploadPaper}
                   onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
                   onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
-                  onNavigate={(view) => setCurrentScreen(view)}
-                  onBack={() => setCurrentScreen('inventory')}
+                  onNavigate={(view) => navigateProtected(view)}
+                  onBack={() => navigateProtected('inventory')}
                   onSearchTicket={(queryStr) => {
                     setDashboardSearchQuery(queryStr);
-                    setCurrentScreen('unpaid');
+                    navigateProtected('unpaid');
                   }}
                 />
               )}
@@ -1052,7 +1077,7 @@ export const LotteryAppMain: React.FC = () => {
                   onConfirmPayment={handleConfirmPayment}
                   onCancelBooking={handleCancelBooking}
                   onConfirmPendingBooking={handleConfirmPendingBooking}
-                  onBack={() => setCurrentScreen('dashboard')}
+                  onBack={() => navigateProtected(currentRole === 'admin' ? 'dashboard' : 'inventory')}
                 />
               )}
               {isAuthenticatedAndVerified && currentScreen === 'paid' && (
@@ -1061,38 +1086,38 @@ export const LotteryAppMain: React.FC = () => {
                   allBookings={allBookings}
                   initialSearchQuery={dashboardSearchQuery}
                   currentRole={currentRole}
-                  onBack={() => setCurrentScreen('dashboard')}
+                  onBack={() => navigateProtected(currentRole === 'admin' ? 'dashboard' : 'inventory')}
                   onReversePayment={(ticketNum, reason) => {
                     handleCancelBooking(ticketNum, reason);
                   }}
                 />
               )}
-              {isAuthenticatedAndVerified && currentScreen === 'winners' && (
+              {isAuthenticatedAndVerified && currentScreen === 'winners' && currentRole === 'admin' && (
                 <TodayWinnerScreen
                   winners={winners}
                   currentRole={currentRole}
                   businessDate={config.businessDate}
                   seriesTitle={config.seriesTitle}
                   onAddWinner={handleAddWinner}
-                  onBack={() => setCurrentScreen('dashboard')}
+                  onBack={() => navigateProtected('dashboard')}
                 />
               )}
-              {isAuthenticatedAndVerified && currentScreen === 'papers' && (
+              {isAuthenticatedAndVerified && currentScreen === 'papers' && currentRole === 'admin' && (
                 <ResultPaperScreen
                   papers={papers}
                   currentRole={currentRole}
                   businessDate={config.businessDate}
                   seriesTitle={config.seriesTitle}
                   onUploadPaper={handleUploadPaper}
-                  onBack={() => setCurrentScreen('dashboard')}
+                  onBack={() => navigateProtected('dashboard')}
                 />
               )}
-              {isAuthenticatedAndVerified && currentScreen === 'settings' && (
+              {isAuthenticatedAndVerified && currentScreen === 'settings' && currentRole === 'admin' && (
                 <ConfigSettingsScreen
                   config={config}
                   currentRole={currentRole}
                   onSaveConfig={handleSaveConfig}
-                  onBack={() => setCurrentScreen('dashboard')}
+                  onBack={() => navigateProtected('dashboard')}
                 />
               )}
             </PhoneFrame>
@@ -1135,12 +1160,14 @@ export const LotteryAppMain: React.FC = () => {
                 onReleaseTicketLock={handleReleaseTicketLock}
                 onBookSingleTicket={handleBookSingleTicket}
                 onBookMultipleTickets={handleBookMultipleTickets}
-                onOpenBookedTicketsDashboard={() => setCurrentScreen('dashboard')}
+                onOpenBookedTicketsDashboard={() =>
+                  navigateProtected(currentRole === 'admin' ? 'dashboard' : 'unpaid')
+                }
                 onOpenAvailableGallery={() => setIsGalleryOpen(true)}
                 onExportRecords={handleExportRecords}
               />
             )}
-            {isAuthenticatedAndVerified && currentScreen === 'dashboard' && (
+            {isAuthenticatedAndVerified && currentScreen === 'dashboard' && currentRole === 'admin' && (
               <BookedTicketsDashboardScreen
                 config={config}
                 allBookings={allBookings}
@@ -1164,23 +1191,25 @@ export const LotteryAppMain: React.FC = () => {
                 onUploadPaper={handleUploadPaper}
                 onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
                 onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
-                onNavigate={(view) => setCurrentScreen(view)}
-                onBack={() => setCurrentScreen('inventory')}
+                onNavigate={(view) => navigateProtected(view)}
+                onBack={() => navigateProtected('inventory')}
                 onSearchTicket={(queryStr) => {
                   setDashboardSearchQuery(queryStr);
-                  setCurrentScreen('unpaid');
+                  navigateProtected('unpaid');
                 }}
               />
             )}
             {isAuthenticatedAndVerified && currentScreen === 'unpaid' && (
               <UnpaidTicketsScreen
                 unpaidBookings={unpaidList}
+                pendingBookings={pendingList}
                 initialSearchQuery={dashboardSearchQuery}
                 currentRole={currentRole}
                 currentStaffName={currentStaff.name}
                 onConfirmPayment={handleConfirmPayment}
                 onCancelBooking={handleCancelBooking}
-                onBack={() => setCurrentScreen('dashboard')}
+                onConfirmPendingBooking={handleConfirmPendingBooking}
+                onBack={() => navigateProtected(currentRole === 'admin' ? 'dashboard' : 'inventory')}
               />
             )}
             {isAuthenticatedAndVerified && currentScreen === 'paid' && (
@@ -1189,38 +1218,38 @@ export const LotteryAppMain: React.FC = () => {
                 allBookings={allBookings}
                 initialSearchQuery={dashboardSearchQuery}
                 currentRole={currentRole}
-                onBack={() => setCurrentScreen('dashboard')}
+                onBack={() => navigateProtected(currentRole === 'admin' ? 'dashboard' : 'inventory')}
                 onReversePayment={(ticketNum, reason) => {
                   handleCancelBooking(ticketNum, reason);
                 }}
               />
             )}
-            {isAuthenticatedAndVerified && currentScreen === 'winners' && (
+            {isAuthenticatedAndVerified && currentScreen === 'winners' && currentRole === 'admin' && (
               <TodayWinnerScreen
                 winners={winners}
                 currentRole={currentRole}
                 businessDate={config.businessDate}
                 seriesTitle={config.seriesTitle}
                 onAddWinner={handleAddWinner}
-                onBack={() => setCurrentScreen('dashboard')}
+                onBack={() => navigateProtected('dashboard')}
               />
             )}
-            {isAuthenticatedAndVerified && currentScreen === 'papers' && (
+            {isAuthenticatedAndVerified && currentScreen === 'papers' && currentRole === 'admin' && (
               <ResultPaperScreen
                 papers={papers}
                 currentRole={currentRole}
                 businessDate={config.businessDate}
                 seriesTitle={config.seriesTitle}
                 onUploadPaper={handleUploadPaper}
-                onBack={() => setCurrentScreen('dashboard')}
+                onBack={() => navigateProtected('dashboard')}
               />
             )}
-            {isAuthenticatedAndVerified && currentScreen === 'settings' && (
+            {isAuthenticatedAndVerified && currentScreen === 'settings' && currentRole === 'admin' && (
               <ConfigSettingsScreen
                 config={config}
                 currentRole={currentRole}
                 onSaveConfig={handleSaveConfig}
-                onBack={() => setCurrentScreen('dashboard')}
+                onBack={() => navigateProtected('dashboard')}
               />
             )}
           </div>
