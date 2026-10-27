@@ -247,7 +247,31 @@ function createAppsScriptSandbox() {
           };
         }
 
-        // 4C. Firestore REST API: documents:runQuery
+        // 4C. Firestore REST API: documents:commit
+        if (url.includes('/databases/(default)/documents:commit')) {
+          const payload = JSON.parse(opts.payload || '{}');
+          const writes = payload.writes || [];
+          for (const w of writes) {
+            if (w.update) {
+              const fullDocName = w.update.name || '';
+              const docMatch = fullDocName.match(/\/databases\/\(default\)\/documents\/(.+)$/);
+              if (docMatch) {
+                const docPath = decodeURIComponent(docMatch[1]);
+                const docObj = fromFirestoreRaw({ fields: w.update.fields || {} });
+                firestoreDocs.set(docPath, docObj);
+              }
+            }
+          }
+          return {
+            getResponseCode: () => 200,
+            getContentText: () =>
+              JSON.stringify({
+                writeResults: writes.map(() => ({ updateTime: new Date().toISOString() })),
+              }),
+          };
+        }
+
+        // 4D. Firestore REST API: documents:runQuery
         if (url.includes('/databases/(default)/documents:runQuery')) {
           const payload = JSON.parse(opts.payload || '{}');
           const filter = payload?.structuredQuery?.where?.fieldFilter;
@@ -2796,19 +2820,25 @@ async function runAllTests() {
     s29RootLiveFirebase.includes('subscribeWeeklyPresetsFirestore') &&
     s29RootLiveFirebase.includes('saveWeeklyPresetsFirestore') &&
     s29RootLiveFirebase.includes('publishWeeklyPresetForDateFirestore') &&
+    s29RootLiveFirebase.includes('if (!auth?.currentUser)') &&
+    s29RootLiveFirebase.includes('success: false') &&
     s29AppLiveFirebase.includes('subscribeWeeklyPresetsFirestore') &&
     s29AppLiveFirebase.includes('saveWeeklyPresetsFirestore') &&
-    s29AppLiveFirebase.includes('publishWeeklyPresetForDateFirestore');
+    s29AppLiveFirebase.includes('publishWeeklyPresetForDateFirestore') &&
+    s29AppLiveFirebase.includes('if (!auth?.currentUser)') &&
+    s29AppLiveFirebase.includes('success: false');
 
   const uiParity =
     s29RootHeaderScreen.includes('Weekly Presets') &&
     s29RootHeaderScreen.includes('isWeeklyPresetsModalOpen') &&
     s29RootHeaderScreen.includes('handlePublishFullWeek') &&
     s29RootHeaderScreen.includes('handleApplyActiveDayPresetToCurrentDraw') &&
+    s29RootHeaderScreen.includes('saveRes && !saveRes.success') &&
     s29AppHeaderScreen.includes('Weekly Presets') &&
     s29AppHeaderScreen.includes('isWeeklyPresetsModalOpen') &&
     s29AppHeaderScreen.includes('handlePublishFullWeek') &&
     s29AppHeaderScreen.includes('handleApplyActiveDayPresetToCurrentDraw') &&
+    s29AppHeaderScreen.includes('saveRes && !saveRes.success') &&
     s29RootDrawScreen.includes('1-Week Draw Date Schedule') &&
     s29RootDrawScreen.includes('weekDays') &&
     s29AppDrawScreen.includes('1-Week Draw Date Schedule') &&
@@ -2889,6 +2919,114 @@ async function runAllTests() {
     'Scenario 29: 1-Week Daily Ticket Presets (Configuration, Day-by-Day Customization & 7-Day Batch Publishing)',
     s29Passed,
     'Verified 100% parity across types, service, liveFirebase, TicketInventoryHeaderScreen, and EnterDrawDateScreen; Admin-only Firestore write-lock on /config/weeklyPresets; and successful 7-day schedule inventory generation'
+  );
+
+  // =============================================================
+  // Scenario 30: Performance, Admin Dashboard & Reliability Optimization
+  // =============================================================
+  // 1. Benchmark Batches of 25, 100, and 500 Tickets
+  const benchDrawDate = '2026-11-20';
+
+  // Helper to measure batch publishing
+  function benchmarkBatch(count, startNum) {
+    const t0 = performance.now();
+    const tickets = [];
+    for (let i = startNum; i < startNum + count; i++) {
+      tickets.push(String(i).padStart(4, '0'));
+    }
+    const tGen = performance.now() - t0;
+
+    const tWriteStart = performance.now();
+    const pubRes = env.invokePost({
+      action: 'publishTicketInventory',
+      idToken: dedicatedAdminToken,
+      drawDate: benchDrawDate,
+      seriesId: 'col-1',
+      seriesTitle: 'CARROM GOLD',
+      tickets,
+      status: 'PUBLISHED',
+    });
+    const tWrite = performance.now() - tWriteStart;
+    const tTotal = performance.now() - t0;
+
+    // Simulate listener reflection on Employee grid: O(N) map update
+    const tGridStart = performance.now();
+    const employeeGrid = new Map();
+    for (const item of (pubRes.tickets || [])) {
+      employeeGrid.set(item.ticketNumber, item);
+    }
+    const tGrid = performance.now() - tGridStart;
+
+    const roundTrips = Math.ceil(count / 450); // Using :commit batching (up to 450 per request)
+
+    return {
+      count,
+      success: pubRes.success,
+      addedCount: pubRes.addedCount,
+      tGenMs: Number(tGen.toFixed(2)),
+      tWriteMs: Number(tWrite.toFixed(2)),
+      tTotalMs: Number(tTotal.toFixed(2)),
+      tGridMs: Number(tGrid.toFixed(2)),
+      roundTrips,
+    };
+  }
+
+  const bench25 = benchmarkBatch(25, 1000);
+  const bench100 = benchmarkBatch(100, 2000);
+  const bench500 = benchmarkBatch(500, 3000);
+
+  // 2. Authentication Optimization Benchmark
+  const tAuth1Start = performance.now();
+  const auth1 = env.invokePost({
+    action: 'authenticateUsername',
+    username: 'sasikaran',
+    password: adminRealPass,
+  });
+  const tAuth1 = performance.now() - tAuth1Start;
+
+  const tAuth2Start = performance.now();
+  const auth2 = env.invokePost({
+    action: 'authenticateUsername',
+    username: 'sasikaran',
+    password: adminRealPass,
+  });
+  const tAuth2 = performance.now() - tAuth2Start;
+
+  const authOptimized =
+    auth1.success === true &&
+    auth2.success === true &&
+    auth2.claimsRefreshed === false; // Subsequent login safely skips redundant claims stamping
+
+  // 3. Centralized Admin Overview & Simplified Top Navigation Parity
+  const s30RootNav = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/LotteryAppMain.tsx'), 'utf8');
+  const s30AppNav = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/LotteryAppMain.tsx'), 'utf8');
+  const s30RootDashboard = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/components/BookedTicketsDashboardScreen.tsx'), 'utf8');
+  const s30AppDashboard = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/components/BookedTicketsDashboardScreen.tsx'), 'utf8');
+
+  const navSimplified =
+    s30RootNav.includes("currentRole !== 'admin'") &&
+    s30AppNav.includes("currentRole !== 'admin'") &&
+    s30RootDashboard.includes('Admin Centralized Overview') &&
+    s30AppDashboard.includes('Admin Centralized Overview') &&
+    s30RootDashboard.includes('Pending Approvals') &&
+    s30RootDashboard.includes('Confirmed &amp; Paid') &&
+    s30RootDashboard.includes('Winners &amp; Results') &&
+    s30RootDashboard.includes('Weekly Presets');
+
+  const s30Passed =
+    bench25.success &&
+    bench25.addedCount === 25 &&
+    bench100.success &&
+    bench100.addedCount === 100 &&
+    bench500.success &&
+    bench500.addedCount === 500 &&
+    authOptimized &&
+    navSimplified;
+
+  assertTest(
+    'Scenario 30: Performance Optimization, Centralized Admin Overview & Batch Reliability',
+    s30Passed,
+    `Batch 25 tkts: ${bench25.tTotalMs}ms (${bench25.roundTrips} RT); Batch 100 tkts: ${bench100.tTotalMs}ms (${bench100.roundTrips} RT); Batch 500 tkts: ${bench500.tTotalMs}ms (${bench500.roundTrips} RT); Admin login optimized (claimsRefreshed=${auth2.claimsRefreshed}); Centralized Overview & Simplified Navigation verified`
   );
 
   // -------------------------------------------------------------

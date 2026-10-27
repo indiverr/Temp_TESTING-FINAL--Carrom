@@ -241,9 +241,14 @@ function handleAuthenticateUsername_(body) {
   } catch (e) {}
   var uid = String(signInData.localId || resolvedUid || '').trim();
 
+  // Retrieve user document if uid exists
+  var userDoc = null;
+  if (uid) {
+    userDoc = firestoreGetDocument_('users/' + encodeURIComponent(uid));
+  }
+
   // Enforce that Sign-Up OTP verification was completed (never allow unverified sign-up accounts to log in)
   if (uid && !isDedicatedAdmin) {
-    var userDoc = firestoreGetDocument_('users/' + encodeURIComponent(uid));
     var isPendingSignup =
       (userDoc && userDoc.registrationCompleted === false && userDoc.otpVerified !== true && userDoc.verified !== true) ||
       (dirDoc && dirDoc.registrationCompleted === false && dirDoc.otpVerified !== true && dirDoc.verified !== true);
@@ -268,32 +273,44 @@ function handleAuthenticateUsername_(body) {
     displayName = 'Sasikaran';
   }
 
+  var claimsRefreshed = false;
   if (uid) {
-    // Ensure verified or pre-existing accounts have active server-signed claims so login requires zero OTP
-    var now = Date.now();
-    setFirebaseUserVerifiedClaims_(uid, { role: role }, role, now);
-    firestorePatchFields_('users/' + encodeURIComponent(uid), {
-      uid: uid,
-      email: email,
-      name: displayName,
-      displayName: displayName,
-      username: rawUsername,
-      role: role,
-      verified: true,
-      otpVerified: true,
-      registrationCompleted: true,
-      firstLoginCompleted: true,
-    });
-    firestorePatchFields_('userDirectory/' + encodeURIComponent(rawUsername), {
-      uid: uid,
-      email: email,
-      role: role,
-      displayName: displayName,
-      verified: true,
-      otpVerified: true,
-      registrationCompleted: true,
-      updatedAtIso: new Date(now).toISOString(),
-    });
+    // Check if the user profile and custom claims are already securely provisioned
+    // to avoid redundant network requests on every subsequent normal login.
+    var needsClaimsUpdate = true;
+    if (userDoc && userDoc.role === role && userDoc.otpVerified === true && userDoc.registrationCompleted === true) {
+      if (dirDoc && dirDoc.role === role && dirDoc.otpVerified === true) {
+        needsClaimsUpdate = false;
+      }
+    }
+
+    if (needsClaimsUpdate) {
+      claimsRefreshed = true;
+      var now = Date.now();
+      setFirebaseUserVerifiedClaims_(uid, { role: role }, role, now);
+      firestorePatchFields_('users/' + encodeURIComponent(uid), {
+        uid: uid,
+        email: email,
+        name: displayName,
+        displayName: displayName,
+        username: rawUsername,
+        role: role,
+        verified: true,
+        otpVerified: true,
+        registrationCompleted: true,
+        firstLoginCompleted: true,
+      });
+      firestorePatchFields_('userDirectory/' + encodeURIComponent(rawUsername), {
+        uid: uid,
+        email: email,
+        role: role,
+        displayName: displayName,
+        verified: true,
+        otpVerified: true,
+        registrationCompleted: true,
+        updatedAtIso: new Date(now).toISOString(),
+      });
+    }
   }
 
   cache.remove(rateKey);
@@ -308,6 +325,7 @@ function handleAuthenticateUsername_(body) {
     displayName: displayName,
     verified: true,
     otpVerified: true,
+    claimsRefreshed: claimsRefreshed,
   });
 }
 
@@ -2024,6 +2042,7 @@ function handlePublishTicketInventory_(body) {
     var added = [];
     var skipped = [];
     var seen = {};
+    var writesToCommit = [];
 
     for (var i = 0; i < rawTickets.length; i++) {
       var normNum = normalizeTicketNumber_(rawTickets[i]);
@@ -2059,8 +2078,12 @@ function handlePublishTicketInventory_(body) {
         createdByName: operator.name,
       };
 
-      firestoreSetDocument_(invPath, invItem);
+      writesToCommit.push({ docPath: invPath, data: invItem });
       added.push(invItem);
+    }
+
+    if (writesToCommit.length > 0) {
+      firestoreCommitBatch_(writesToCommit);
     }
 
     return jsonResponse_({
@@ -2783,6 +2806,53 @@ function firestoreGetDocument_(docPath) {
 
   var rawDoc = JSON.parse(res.getContentText());
   return fromFirestoreFields_(rawDoc.fields || {});
+}
+
+/**
+ * Commits a batch of document writes in ONE single atomic HTTP request
+ * using the official Google Cloud Firestore REST documents:commit API.
+ * Eliminates hundreds of sequential UrlFetchApp round trips down to a single batch!
+ */
+function firestoreCommitBatch_(writesList) {
+  if (!writesList || !writesList.length) return { writeCount: 0 };
+  var projectId = getProjectId_();
+  var token = getAdminAccessToken_();
+  var commitUrl =
+    'https://firestore.googleapis.com/v1/projects/' +
+    encodeURIComponent(projectId) +
+    '/databases/(default)/documents:commit';
+
+  var CHUNK_SIZE = 450;
+  for (var i = 0; i < writesList.length; i += CHUNK_SIZE) {
+    var chunk = writesList.slice(i, i + CHUNK_SIZE);
+    var formattedWrites = [];
+    for (var j = 0; j < chunk.length; j++) {
+      var w = chunk[j];
+      var fullDocName =
+        'projects/' +
+        projectId +
+        '/databases/(default)/documents/' +
+        w.docPath;
+      formattedWrites.push({
+        update: {
+          name: fullDocName,
+          fields: toFirestoreFields_(w.data),
+        },
+      });
+    }
+
+    var res = safeFetch_(commitUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + token },
+      payload: JSON.stringify({ writes: formattedWrites }),
+    });
+
+    if (res.getResponseCode() !== 200) {
+      throw new Error('Firestore batch commit error (HTTP ' + res.getResponseCode() + ').');
+    }
+  }
+  return { writeCount: writesList.length };
 }
 
 /**

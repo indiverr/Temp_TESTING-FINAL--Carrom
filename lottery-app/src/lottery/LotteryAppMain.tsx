@@ -845,74 +845,83 @@ export const LotteryAppMain: React.FC = () => {
             >
               Overview
             </button>
-            <button
-              onClick={() => navigateProtected('unpaid')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
-                currentScreen === 'unpaid'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <span>Pending</span>
-              <span
-                className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+            {/* Non-Admin Sub-Screens (Admins access these centrally via Overview) */}
+            {currentRole !== 'admin' && (
+              <button
+                onClick={() => navigateProtected('unpaid')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
                   currentScreen === 'unpaid'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-slate-200 text-slate-700'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
-                {unpaidList.length}
-              </span>
-            </button>
-            <button
-              onClick={() => navigateProtected('paid')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
-                currentScreen === 'paid'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <span>Confirmed</span>
-              <span
-                className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                  currentScreen === 'paid'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-slate-200 text-slate-700'
+                <span>Pending</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                    currentScreen === 'unpaid'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {unpaidList.length}
+                </span>
+              </button>
+            )}
+            {currentRole === 'paid_employee' && (
+              <>
+                <button
+                  onClick={() => navigateProtected('paid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
+                    currentScreen === 'paid'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>Confirmed</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                      currentScreen === 'paid'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {paidList.length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => navigateProtected('winners')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    currentScreen === 'winners'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  Winners
+                </button>
+                <button
+                  onClick={() => navigateProtected('papers')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    currentScreen === 'papers'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  Result Sheets
+                </button>
+              </>
+            )}
+            {(currentRole === 'admin' || currentRole === 'paid_employee') && (
+              <button
+                onClick={() => navigateProtected('settings')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  currentScreen === 'settings'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
-                {paidList.length}
-              </span>
-            </button>
-            <button
-              onClick={() => navigateProtected('winners')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentScreen === 'winners'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              Winners
-            </button>
-            <button
-              onClick={() => navigateProtected('papers')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentScreen === 'papers'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              Result Sheets
-            </button>
-            <button
-              onClick={() => navigateProtected('settings')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentScreen === 'settings'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              Settings
-            </button>
+                Settings
+              </button>
+            )}
           </nav>
 
           {/* Operator identity & Backend Mode */}
@@ -1009,6 +1018,22 @@ export const LotteryAppMain: React.FC = () => {
                   paidCount={paidList.length}
                   winnersCount={winners.length}
                   papersCount={papers.length}
+                  pendingBookings={pendingList}
+                  unpaidBookings={unpaidList}
+                  paidBookings={paidList}
+                  winners={winners}
+                  papers={papers}
+                  inventoryTickets={inventoryTickets}
+                  weeklyPresets={weeklyPresets}
+                  currentRole={currentRole}
+                  currentStaffName={currentStaff.name}
+                  onConfirmPendingBooking={handleConfirmPendingBooking}
+                  onCancelBooking={handleCancelBooking}
+                  onConfirmPayment={handleConfirmPayment}
+                  onAddWinner={handleAddWinner}
+                  onUploadPaper={handleUploadPaper}
+                  onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
+                  onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
                   onNavigate={(view) => setCurrentScreen(view)}
                   onBack={() => setCurrentScreen('inventory')}
                   onSearchTicket={(queryStr) => {
@@ -1123,6 +1148,22 @@ export const LotteryAppMain: React.FC = () => {
                 paidCount={paidList.length}
                 winnersCount={winners.length}
                 papersCount={papers.length}
+                pendingBookings={pendingList}
+                unpaidBookings={unpaidList}
+                paidBookings={paidList}
+                winners={winners}
+                papers={papers}
+                inventoryTickets={inventoryTickets}
+                weeklyPresets={weeklyPresets}
+                currentRole={currentRole}
+                currentStaffName={currentStaff.name}
+                onConfirmPendingBooking={handleConfirmPendingBooking}
+                onCancelBooking={handleCancelBooking}
+                onConfirmPayment={handleConfirmPayment}
+                onAddWinner={handleAddWinner}
+                onUploadPaper={handleUploadPaper}
+                onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
+                onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
                 onNavigate={(view) => setCurrentScreen(view)}
                 onBack={() => setCurrentScreen('inventory')}
                 onSearchTicket={(queryStr) => {

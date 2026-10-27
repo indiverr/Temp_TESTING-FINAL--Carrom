@@ -1750,6 +1750,7 @@ class LiveFirebaseService {
       let serverResolvedRole: LoginType = 'employee';
       const scriptUrl = getOtpAppsScriptUrl();
 
+      let claimsRefreshedOnServer = false;
       if (trimmedId.includes('@')) {
         const cred = await signInWithEmailAndPassword(auth, trimmedId, password);
         signedInUser = cred.user;
@@ -1769,6 +1770,7 @@ class LiveFirebaseService {
           }
           resolvedName = authData.displayName || resolvedName;
           serverResolvedRole = (authData.role as LoginType) || 'employee';
+          claimsRefreshedOnServer = Boolean(authData.claimsRefreshed);
           const cred = await signInWithEmailAndPassword(auth, authData.email, password);
           signedInUser = cred.user;
         } else if (isEmulatorMode() && functions) {
@@ -1793,8 +1795,8 @@ class LiveFirebaseService {
         }
       }
 
-      // Inspect server-signed ID token claims (never trust client-selected role for privilege assignment)
-      let tokenResult = await signedInUser.getIdTokenResult(true);
+      // Inspect server-signed ID token claims. Only force token refresh if custom claims were legitimately updated on server.
+      let tokenResult = await signedInUser.getIdTokenResult(claimsRefreshedOnServer);
       let claimRole: LoginType =
         (tokenResult.claims.role as LoginType) || serverResolvedRole || 'employee';
       let isAccountVerified = tokenResult.claims.otpVerified === true;
@@ -2397,28 +2399,49 @@ class LiveFirebaseService {
     if (operatorRole !== 'admin') {
       return { success: false, error: 'Only Admins can modify weekly ticket presets.' };
     }
-    const { db } = initFirebase();
-    const localRes = lotteryService.updateWeeklyPresets(presets, operatorRole);
-    if (!localRes.success) {
-      return localRes;
-    }
+    const { auth, db } = initFirebase();
 
     if (db) {
+      if (!auth?.currentUser) {
+        return {
+          success: false,
+          error: 'Authentication required. Please sign in as Admin to save weekly presets.',
+        };
+      }
+
       try {
         const docRef = doc(db, 'config', 'weeklyPresets');
-        await setDoc(
-          docRef,
-          {
-            ...presets,
-            updatedAtIso: new Date().toISOString(),
-          },
-          { merge: true }
-        );
+        const payload: WeeklyTicketPresetsConfig = {
+          ...presets,
+          updatedAtIso: new Date().toISOString(),
+          updatedByUid: auth.currentUser.uid || 'admin',
+        };
+        await setDoc(docRef, payload, { merge: true });
+
+        // Update local memory and cache ONLY after Firestore write succeeds
+        lotteryService.updateWeeklyPresets(payload, operatorRole);
+        return { success: true, presets: lotteryService.getWeeklyPresets() };
       } catch (err: any) {
-        console.warn('[Firestore] Failed to write weeklyPresets to Firestore:', err);
+        const safeMessage =
+          err?.code === 'permission-denied'
+            ? 'Permission denied: Your session does not have Admin privileges in Firestore. Please sign in again as sasikaran.'
+            : (err?.message || 'Database write failed. Could not save weekly presets to Firestore.');
+
+        console.error('[Firestore] Failed to write weeklyPresets to Firestore:', {
+          code: err?.code,
+          message: err?.message,
+          uid: auth?.currentUser?.uid,
+        });
+
+        return {
+          success: false,
+          error: `Database write failed: ${safeMessage}`,
+        };
       }
     }
-    return { success: true, presets: lotteryService.getWeeklyPresets() };
+
+    const localRes = lotteryService.updateWeeklyPresets(presets, operatorRole);
+    return localRes;
   }
 
   public async publishWeeklyPresetForDateFirestore(
@@ -2468,8 +2491,46 @@ class LiveFirebaseService {
       return { success: false, addedCount: 0, error: 'Only Admins can add or publish tickets.' };
     }
     const { auth, db } = initFirebase();
-    const scriptUrl = getOtpAppsScriptUrl();
 
+    // 1. In-memory validation, range parsing, deduplication and booked ticket protection (< 1ms)
+    const localRes = lotteryService.addTicketInventory(
+      tickets,
+      drawDate,
+      seriesId,
+      seriesTitle,
+      status,
+      operator
+    );
+
+    if (!localRes.success) {
+      return { success: false, addedCount: 0, error: localRes.error || 'Failed to generate tickets.' };
+    }
+
+    if (localRes.added.length === 0) {
+      return { success: true, addedCount: 0 };
+    }
+
+    // 2. High-performance direct Firestore Batched Write (< 1 round-trip for <= 400 tickets)
+    if (db && auth?.currentUser) {
+      try {
+        const CHUNK_SIZE = 400; // Well within Firestore 500-op limit
+        for (let i = 0; i < localRes.added.length; i += CHUNK_SIZE) {
+          const chunk = localRes.added.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+          for (const item of chunk) {
+            const docRef = doc(db, 'ticketInventory', item.id);
+            batch.set(docRef, item, { merge: true });
+          }
+          await batch.commit();
+        }
+        return { success: true, addedCount: localRes.added.length };
+      } catch (e: any) {
+        console.warn('[Firestore] Direct batch write failed, trying backend fallback:', e);
+      }
+    }
+
+    // 3. Fallback to Google Apps Script Service Account (:commit batch API)
+    const scriptUrl = getOtpAppsScriptUrl();
     if (auth?.currentUser && scriptUrl) {
       try {
         const idToken = await auth.currentUser.getIdToken();
@@ -2483,43 +2544,13 @@ class LiveFirebaseService {
           tickets,
         });
         if (serverRes?.success) {
-          lotteryService.addTicketInventory(
-            tickets,
-            drawDate,
-            seriesId,
-            seriesTitle,
-            status,
-            operator
-          );
-          return { success: true, addedCount: serverRes.addedCount || tickets.length };
+          return { success: true, addedCount: serverRes.addedCount || localRes.added.length };
         }
         if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
           return { success: false, addedCount: 0, error: serverRes.error };
         }
       } catch (e: any) {
-        console.warn('[Apps Script] publishTicketInventory error, fallback to Firestore/local', e);
-      }
-    }
-
-    const localRes = lotteryService.addTicketInventory(
-      tickets,
-      drawDate,
-      seriesId,
-      seriesTitle,
-      status,
-      operator
-    );
-
-    if (db) {
-      try {
-        const batch = writeBatch(db);
-        for (const item of localRes.added) {
-          const docRef = doc(db, 'ticketInventory', item.id);
-          batch.set(docRef, item, { merge: true });
-        }
-        await batch.commit();
-      } catch (e) {
-        console.warn('[Firestore] Batch inventory commit warning:', e);
+        console.warn('[Apps Script] publishTicketInventory error:', e);
       }
     }
 

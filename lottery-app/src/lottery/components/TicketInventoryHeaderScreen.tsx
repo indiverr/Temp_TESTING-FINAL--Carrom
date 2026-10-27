@@ -329,7 +329,15 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
     setPresetFeedback(null);
     try {
       if (onUpdateWeeklyPresets) {
-        await onUpdateWeeklyPresets(editingWeeklyPresets);
+        const saveRes = await onUpdateWeeklyPresets(editingWeeklyPresets);
+        if (saveRes && !saveRes.success) {
+          setPresetFeedback({
+            type: 'error',
+            message: saveRes.error || 'Failed to save weekly presets before publishing schedule.',
+          });
+          setIsPublishingWeek(false);
+          return;
+        }
       } else {
         lotteryService.updateWeeklyPresets(editingWeeklyPresets, currentRole);
       }
@@ -429,39 +437,44 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
 
   const allInventory = inventoryTickets && inventoryTickets.length > 0 ? inventoryTickets : internalInventory;
 
-  const confirmedSet = new Set<string>();
-  for (const b of bookedTickets) {
-    if (b.bookingStatus === 'Booked') {
-      confirmedSet.add(b.ticketNumber);
+  const confirmedSet = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const b of bookedTickets) {
+      if (b.bookingStatus === 'Booked') set.add(b.ticketNumber);
     }
-  }
-
-  const pendingSet = new Set<string>();
-  for (const b of bookedTickets) {
-    if (b.bookingStatus === 'Pending Confirmation') {
-      pendingSet.add(b.ticketNumber);
+    for (const inv of allInventory) {
+      if (inv.bookingStatus === 'Booked') set.add(inv.ticketNumber);
     }
-  }
+    return set;
+  }, [bookedTickets, allInventory]);
 
-  const isTicketBooked = (num: string) =>
-    confirmedSet.has(num) ||
-    allInventory.some((inv) => inv.ticketNumber === num && inv.bookingStatus === 'Booked');
+  const pendingSet = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const b of bookedTickets) {
+      if (b.bookingStatus === 'Pending Confirmation') set.add(b.ticketNumber);
+    }
+    for (const inv of allInventory) {
+      if (inv.bookingStatus === 'Pending Confirmation') set.add(inv.ticketNumber);
+    }
+    return set;
+  }, [bookedTickets, allInventory]);
 
-  const isTicketPending = (num: string) =>
-    pendingSet.has(num) ||
-    allInventory.some((inv) => inv.ticketNumber === num && inv.bookingStatus === 'Pending Confirmation');
+  const isTicketBooked = React.useCallback((num: string) => confirmedSet.has(num), [confirmedSet]);
+  const isTicketPending = React.useCallback((num: string) => pendingSet.has(num), [pendingSet]);
 
   // Confirmed tickets MUST DISAPPEAR automatically from visible Ticket Grid!
-  // Remaining tickets move upward to fill empty spaces immediately.
-  const visibleTickets = allInventory
-    .filter((inv) => {
-      if (currentRole !== 'admin' && inv.status !== 'PUBLISHED') return false;
-      if (inv.bookingStatus === 'Booked' || confirmedSet.has(inv.ticketNumber)) return false;
-      return true;
-    })
-    .sort((a, b) => a.ticketNumber.localeCompare(b.ticketNumber, undefined, { numeric: true }));
+  // Remaining tickets move upward to fill empty spaces immediately: visibleTickets = allInventory filtered
+  const visibleTickets = React.useMemo(() => {
+    return allInventory
+      .filter((inv) => {
+        if (currentRole !== 'admin' && inv.status !== 'PUBLISHED') return false;
+        if (inv.bookingStatus === 'Booked' || confirmedSet.has(inv.ticketNumber)) return false;
+        return true;
+      })
+      .sort((a, b) => a.ticketNumber.localeCompare(b.ticketNumber, undefined, { numeric: true }));
+  }, [allInventory, confirmedSet, currentRole]);
 
-  const quickNumbers = visibleTickets.map((t) => t.ticketNumber);
+  const quickNumbers = React.useMemo(() => visibleTickets.map((t) => t.ticketNumber), [visibleTickets]);
 
   const handleExecuteAddTickets = async () => {
     setAddError(null);
