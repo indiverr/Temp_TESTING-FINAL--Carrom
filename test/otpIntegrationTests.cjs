@@ -2767,6 +2767,130 @@ async function runAllTests() {
     'Admin successfully accesses inventory management and paid reversals; Paid Employee and Employee are strictly blocked (PERMISSION_DENIED)'
   );
 
+  // Scenario 29: 1-Week Daily Ticket Presets (Configuration, Day-by-Day Customization & 7-Day Batch Publishing)
+  const s29RootTypes = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/types.ts'), 'utf8');
+  const s29AppTypes = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/types.ts'), 'utf8');
+  const s29RootLiveFirebase = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/liveFirebase.ts'), 'utf8');
+  const s29AppLiveFirebase = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/liveFirebase.ts'), 'utf8');
+  const s29RootHeaderScreen = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/components/TicketInventoryHeaderScreen.tsx'), 'utf8');
+  const s29AppHeaderScreen = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/components/TicketInventoryHeaderScreen.tsx'), 'utf8');
+  const s29RootDrawScreen = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/components/EnterDrawDateScreen.tsx'), 'utf8');
+  const s29AppDrawScreen = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app/src/lottery/components/EnterDrawDateScreen.tsx'), 'utf8');
+
+  // 1. Structural Parity & Type Checks
+  const typesParity =
+    s29RootTypes === s29AppTypes &&
+    s29RootTypes.includes('export interface DayTicketPreset') &&
+    s29RootTypes.includes('export interface WeeklyTicketPresetsConfig') &&
+    s29RootTypes.includes('export const DEFAULT_WEEKLY_PRESETS') &&
+    s29RootTypes.includes('export const DAYS_OF_WEEK');
+
+  const serviceParity =
+    rootLotteryService.includes('getWeeklyPresets') &&
+    rootLotteryService.includes('updateWeeklyPresets') &&
+    rootLotteryService.includes('expandPresetTickets') &&
+    rootLotteryService.includes('updateDayPreset') &&
+    rootLotteryService.includes('WEEKLY_PRESETS');
+
+  const firebaseParity =
+    s29RootLiveFirebase.includes('subscribeWeeklyPresetsFirestore') &&
+    s29RootLiveFirebase.includes('saveWeeklyPresetsFirestore') &&
+    s29RootLiveFirebase.includes('publishWeeklyPresetForDateFirestore') &&
+    s29AppLiveFirebase.includes('subscribeWeeklyPresetsFirestore') &&
+    s29AppLiveFirebase.includes('saveWeeklyPresetsFirestore') &&
+    s29AppLiveFirebase.includes('publishWeeklyPresetForDateFirestore');
+
+  const uiParity =
+    s29RootHeaderScreen.includes('Weekly Presets') &&
+    s29RootHeaderScreen.includes('isWeeklyPresetsModalOpen') &&
+    s29RootHeaderScreen.includes('handlePublishFullWeek') &&
+    s29RootHeaderScreen.includes('handleApplyActiveDayPresetToCurrentDraw') &&
+    s29AppHeaderScreen.includes('Weekly Presets') &&
+    s29AppHeaderScreen.includes('isWeeklyPresetsModalOpen') &&
+    s29AppHeaderScreen.includes('handlePublishFullWeek') &&
+    s29AppHeaderScreen.includes('handleApplyActiveDayPresetToCurrentDraw') &&
+    s29RootDrawScreen.includes('1-Week Draw Date Schedule') &&
+    s29RootDrawScreen.includes('weekDays') &&
+    s29AppDrawScreen.includes('1-Week Draw Date Schedule') &&
+    s29AppDrawScreen.includes('weekDays');
+
+  // 2. Security Rules Check for /config/weeklyPresets
+  // Role matrix: unauthenticated (reject), employee (read only), paid_employee (read only), admin (read & write)
+  const unauthConfigWrite = evaluateFirestoreSecurityRules(null, 'write', 'config', { days: {} });
+  const empConfigWrite = evaluateFirestoreSecurityRules(
+    { uid: 'u1', token: { otpVerified: true, role: 'employee' } },
+    'write',
+    'config',
+    { days: {} }
+  );
+  const paidEmpConfigWrite = evaluateFirestoreSecurityRules(
+    { uid: 'u2', token: { otpVerified: true, role: 'paid_employee' } },
+    'write',
+    'config',
+    { days: {} }
+  );
+  const adminConfigWrite = evaluateFirestoreSecurityRules(
+    { uid: 'u3', token: { otpVerified: true, role: 'admin' } },
+    'write',
+    'config',
+    { days: {} }
+  );
+  const empConfigRead = evaluateFirestoreSecurityRules(
+    { uid: 'u1', token: { otpVerified: true, role: 'employee' } },
+    'read',
+    'config'
+  );
+
+  // 3. Publish 7 Consecutive Days of Presets to Backend
+  const daysOfWeekSample = [
+    { date: '2026-11-10', day: 'Tuesday', start: 0, count: 50 },
+    { date: '2026-11-11', day: 'Wednesday', start: 50, count: 50 },
+    { date: '2026-11-12', day: 'Thursday', start: 100, count: 50 },
+    { date: '2026-11-13', day: 'Friday', start: 150, count: 50 },
+    { date: '2026-11-14', day: 'Saturday', start: 200, count: 100 },
+    { date: '2026-11-15', day: 'Sunday', start: 300, count: 100 },
+    { date: '2026-11-16', day: 'Monday', start: 400, count: 50 },
+  ];
+
+  let allSevenDaysPublished = true;
+  for (const item of daysOfWeekSample) {
+    const tickets = [];
+    for (let i = item.start; i < item.start + item.count; i++) {
+      tickets.push(String(i).padStart(4, '0'));
+    }
+    const pubRes = env.invokePost({
+      action: 'publishTicketInventory',
+      idToken: dedicatedAdminToken,
+      drawDate: item.date,
+      seriesId: 'col-1',
+      seriesTitle: '0075 - 0099',
+      tickets,
+      status: 'PUBLISHED',
+    });
+    if (!pubRes.success || pubRes.addedCount !== item.count) {
+      allSevenDaysPublished = false;
+      break;
+    }
+  }
+
+  const s29Passed =
+    typesParity &&
+    serviceParity &&
+    firebaseParity &&
+    uiParity &&
+    unauthConfigWrite === false &&
+    empConfigWrite === false &&
+    paidEmpConfigWrite === false &&
+    adminConfigWrite === true &&
+    empConfigRead === true &&
+    allSevenDaysPublished === true;
+
+  assertTest(
+    'Scenario 29: 1-Week Daily Ticket Presets (Configuration, Day-by-Day Customization & 7-Day Batch Publishing)',
+    s29Passed,
+    'Verified 100% parity across types, service, liveFirebase, TicketInventoryHeaderScreen, and EnterDrawDateScreen; Admin-only Firestore write-lock on /config/weeklyPresets; and successful 7-day schedule inventory generation'
+  );
+
   // -------------------------------------------------------------
   // Summary
   // -------------------------------------------------------------

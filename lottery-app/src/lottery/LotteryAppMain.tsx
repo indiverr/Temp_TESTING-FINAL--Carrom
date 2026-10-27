@@ -27,6 +27,9 @@ import {
   TicketInventoryItem,
   GridAppearanceConfig,
   DEFAULT_GRID_APPEARANCE,
+  WeeklyTicketPresetsConfig,
+  DEFAULT_WEEKLY_PRESETS,
+  DayOfWeek,
 } from './types';
 import {
   Smartphone,
@@ -62,6 +65,7 @@ export const LotteryAppMain: React.FC = () => {
   const [config, setConfig] = useState<SystemConfig>(lotteryService.getConfig());
   const [inventoryTickets, setInventoryTickets] = useState<TicketInventoryItem[]>([]);
   const [gridAppearance, setGridAppearance] = useState<GridAppearanceConfig>(DEFAULT_GRID_APPEARANCE);
+  const [weeklyPresets, setWeeklyPresets] = useState<WeeklyTicketPresetsConfig>(DEFAULT_WEEKLY_PRESETS);
 
   // Staff and Role state
   const [currentStaff, setCurrentStaff] = useState<EmployeeProfile>({
@@ -163,17 +167,23 @@ export const LotteryAppMain: React.FC = () => {
       const unsubApp = liveFirebase.subscribeGridAppearanceFirestore(
         (app) => setGridAppearance(app)
       );
+      const unsubPresets = liveFirebase.subscribeWeeklyPresetsFirestore(
+        (presets) => setWeeklyPresets(presets)
+      );
       return () => {
         unsubInv();
         unsubApp();
+        unsubPresets();
       };
     }
     const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
       setInventoryTickets(lotteryService.getInventory(config.businessDate, undefined, currentRole));
       setGridAppearance(lotteryService.getGridAppearance());
+      setWeeklyPresets(lotteryService.getWeeklyPresets());
     });
     setInventoryTickets(lotteryService.getInventory(config.businessDate, undefined, currentRole));
     setGridAppearance(lotteryService.getGridAppearance());
+    setWeeklyPresets(lotteryService.getWeeklyPresets());
     return () => unsubLocal();
   }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate, currentRole]);
 
@@ -647,6 +657,75 @@ export const LotteryAppMain: React.FC = () => {
     return localRes;
   };
 
+  const handleUpdateWeeklyPresets = async (newPresets: WeeklyTicketPresetsConfig) => {
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.saveWeeklyPresetsFirestore(newPresets, currentRole);
+      if (res.success) {
+        showToast('Weekly ticket presets saved');
+      } else {
+        showToast(res.error || 'Failed to save presets');
+      }
+      return res;
+    }
+    const localRes = lotteryService.updateWeeklyPresets(newPresets, currentRole);
+    if (localRes.success) {
+      showToast('Weekly ticket presets saved');
+    } else {
+      showToast(localRes.error || 'Failed to save presets');
+    }
+    return localRes;
+  };
+
+  const handlePublishWeeklyPresetForDate = async (
+    drawDate: string,
+    dayName: DayOfWeek
+  ): Promise<{ success: boolean; addedCount: number; error?: string }> => {
+    if (currentRole !== 'admin') {
+      showToast('Only Admins can publish ticket presets');
+      return { success: false, addedCount: 0, error: 'Unauthorized' };
+    }
+    const operator = {
+      id: currentStaff.id,
+      name: currentStaff.name,
+      role: currentRole,
+    };
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.publishWeeklyPresetForDateFirestore(
+        drawDate,
+        dayName,
+        'col-1',
+        config.seriesTitle || 'CARROM GOLD',
+        operator
+      );
+      if (res.success) {
+        showToast(`Published ${res.addedCount} tickets for ${dayName} (${drawDate})`);
+      } else {
+        showToast(res.error || 'Failed to publish preset');
+      }
+      return res;
+    }
+    const dayPreset = weeklyPresets.days[dayName];
+    if (!dayPreset || !dayPreset.enabled) {
+      showToast(`Preset for ${dayName} is disabled`);
+      return { success: false, addedCount: 0, error: 'Disabled' };
+    }
+    const tickets = lotteryService.expandPresetTickets(dayPreset);
+    const localRes = lotteryService.addTicketInventory(
+      tickets,
+      drawDate,
+      'col-1',
+      config.seriesTitle || 'CARROM GOLD',
+      'PUBLISHED',
+      operator
+    );
+    if (localRes.success) {
+      showToast(`Published ${localRes.added.length} tickets for ${dayName} (${drawDate})`);
+    } else {
+      showToast(localRes.error || 'Failed to publish preset');
+    }
+    return { success: localRes.success, addedCount: localRes.added.length, error: localRes.error };
+  };
+
   const handleConfirmPendingBooking = async (bookingId: string) => {
     if (isLiveFirebaseMode) {
       const res = await liveFirebase.confirmPendingBookingFirestore(bookingId, {
@@ -890,8 +969,12 @@ export const LotteryAppMain: React.FC = () => {
               {isAuthenticatedAndVerified && currentScreen === 'enter-date' && (
                 <EnterDrawDateScreen
                   currentStaff={currentStaff}
-                  onEnterDraw={() => setCurrentScreen('inventory')}
+                  onEnterDraw={(selectedDate) => {
+                    handleSaveConfig({ businessDate: selectedDate });
+                    setCurrentScreen('inventory');
+                  }}
                   onOpenAvailableGallery={() => setIsGalleryOpen(true)}
+                  weeklyPresets={weeklyPresets}
                 />
               )}
               {isAuthenticatedAndVerified && currentScreen === 'inventory' && (
@@ -903,8 +986,11 @@ export const LotteryAppMain: React.FC = () => {
                   currentRole={currentRole}
                   inventoryTickets={inventoryTickets}
                   gridAppearance={gridAppearance}
+                  weeklyPresets={weeklyPresets}
                   onAddTicketInventory={handleAddTicketInventory}
                   onUpdateGridAppearance={handleUpdateGridAppearance}
+                  onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
+                  onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
                   onAcquireTicketLock={handleAcquireTicketLock}
                   onRenewTicketLock={handleRenewTicketLock}
                   onReleaseTicketLock={handleReleaseTicketLock}
@@ -997,8 +1083,12 @@ export const LotteryAppMain: React.FC = () => {
             {isAuthenticatedAndVerified && currentScreen === 'enter-date' && (
               <EnterDrawDateScreen
                 currentStaff={currentStaff}
-                onEnterDraw={() => setCurrentScreen('inventory')}
+                onEnterDraw={(selectedDate) => {
+                  handleSaveConfig({ businessDate: selectedDate });
+                  setCurrentScreen('inventory');
+                }}
                 onOpenAvailableGallery={() => setIsGalleryOpen(true)}
+                weeklyPresets={weeklyPresets}
               />
             )}
             {isAuthenticatedAndVerified && currentScreen === 'inventory' && (
@@ -1008,6 +1098,13 @@ export const LotteryAppMain: React.FC = () => {
                 activeLocks={activeLocks}
                 currentUserUid={currentStaff.id}
                 currentRole={currentRole}
+                inventoryTickets={inventoryTickets}
+                gridAppearance={gridAppearance}
+                weeklyPresets={weeklyPresets}
+                onAddTicketInventory={handleAddTicketInventory}
+                onUpdateGridAppearance={handleUpdateGridAppearance}
+                onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
+                onPublishWeeklyPresetForDate={handlePublishWeeklyPresetForDate}
                 onAcquireTicketLock={handleAcquireTicketLock}
                 onRenewTicketLock={handleRenewTicketLock}
                 onReleaseTicketLock={handleReleaseTicketLock}

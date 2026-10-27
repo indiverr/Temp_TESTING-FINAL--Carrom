@@ -14,6 +14,7 @@ import {
   Copy,
   Clock,
   AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import {
   TicketBooking,
@@ -25,6 +26,11 @@ import {
   TicketInventoryItem,
   GridAppearanceConfig,
   DEFAULT_GRID_APPEARANCE,
+  WeeklyTicketPresetsConfig,
+  DayOfWeek,
+  DayTicketPreset,
+  DAYS_OF_WEEK,
+  DEFAULT_WEEKLY_PRESETS,
 } from '../types';
 import { lotteryService } from '../lotteryService';
 import { LOTTERY_COLUMNS_SPEC } from '../mockData';
@@ -37,6 +43,7 @@ interface TicketInventoryHeaderProps {
   currentRole: LoginType;
   inventoryTickets?: TicketInventoryItem[];
   gridAppearance?: GridAppearanceConfig;
+  weeklyPresets?: WeeklyTicketPresetsConfig;
   onAddTicketInventory?: (
     tickets: string[],
     drawDate: string,
@@ -47,6 +54,13 @@ interface TicketInventoryHeaderProps {
   onUpdateGridAppearance?: (
     config: Partial<GridAppearanceConfig>
   ) => Promise<{ success: boolean; config?: GridAppearanceConfig; error?: string }>;
+  onUpdateWeeklyPresets?: (
+    newPresets: WeeklyTicketPresetsConfig
+  ) => Promise<{ success: boolean; presets?: WeeklyTicketPresetsConfig; error?: string }>;
+  onPublishWeeklyPresetForDate?: (
+    drawDate: string,
+    dayName: DayOfWeek
+  ) => Promise<{ success: boolean; addedCount: number; error?: string }>;
   onAcquireTicketLock?: (ticketNumbers: string[]) => Promise<{
     success: boolean;
     lockId?: string;
@@ -105,8 +119,11 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   currentRole = 'employee',
   inventoryTickets,
   gridAppearance,
+  weeklyPresets,
   onAddTicketInventory,
   onUpdateGridAppearance,
+  onUpdateWeeklyPresets,
+  onPublishWeeklyPresetForDate,
   onAcquireTicketLock,
   onRenewTicketLock,
   onReleaseTicketLock,
@@ -180,6 +197,226 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
   // Admin Modals state
   const [isAddTicketsModalOpen, setIsAddTicketsModalOpen] = useState(false);
   const [isAppearanceModalOpen, setIsAppearanceModalOpen] = useState(false);
+  const [isWeeklyPresetsModalOpen, setIsWeeklyPresetsModalOpen] = useState(false);
+  const [activePresetDay, setActivePresetDay] = useState<DayOfWeek>('Monday');
+  const [editingWeeklyPresets, setEditingWeeklyPresets] = useState<WeeklyTicketPresetsConfig>(
+    weeklyPresets || DEFAULT_WEEKLY_PRESETS
+  );
+  const [isSavingWeeklyPresets, setIsSavingWeeklyPresets] = useState(false);
+  const [isPublishingWeek, setIsPublishingWeek] = useState(false);
+  const [isApplyingDayPreset, setIsApplyingDayPreset] = useState(false);
+  const [presetFeedback, setPresetFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Sync editing presets when weeklyPresets prop changes
+  useEffect(() => {
+    if (weeklyPresets) {
+      setEditingWeeklyPresets(JSON.parse(JSON.stringify(weeklyPresets)));
+    }
+  }, [weeklyPresets]);
+
+  // Helper to determine day of week from businessDate (e.g. "27 Oct 2026")
+  const currentDayOfWeekName: DayOfWeek = React.useMemo(() => {
+    try {
+      const parts = String(config.businessDate || '').trim().split(' ');
+      if (parts.length === 3) {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const mIdx = months.indexOf(parts[1]);
+        if (mIdx !== -1) {
+          const d = new Date(parseInt(parts[2], 10), mIdx, parseInt(parts[0], 10));
+          const dayNames: DayOfWeek[] = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          return dayNames[d.getDay()];
+        }
+      }
+    } catch {}
+    return 'Monday';
+  }, [config.businessDate]);
+
+  const activeDayPresetConfig: DayTicketPreset =
+    editingWeeklyPresets.days[activePresetDay] || DEFAULT_WEEKLY_PRESETS.days[activePresetDay];
+
+  const todayDayPresetConfig: DayTicketPreset =
+    editingWeeklyPresets.days[currentDayOfWeekName] || DEFAULT_WEEKLY_PRESETS.days[currentDayOfWeekName];
+
+  const handleUpdateActiveDayField = (fields: Partial<DayTicketPreset>) => {
+    const updated: DayTicketPreset = {
+      ...activeDayPresetConfig,
+      ...fields,
+      dayName: activePresetDay,
+    };
+    const expanded = lotteryService.expandPresetTickets(updated);
+    updated.tickets = expanded;
+
+    setEditingWeeklyPresets((prev) => ({
+      ...prev,
+      days: {
+        ...prev.days,
+        [activePresetDay]: updated,
+      },
+    }));
+  };
+
+  const handleSaveWeeklyPresets = async () => {
+    setIsSavingWeeklyPresets(true);
+    setPresetFeedback(null);
+    try {
+      if (onUpdateWeeklyPresets) {
+        const res = await onUpdateWeeklyPresets(editingWeeklyPresets);
+        if (res && !res.success) {
+          setPresetFeedback({ type: 'error', message: res.error || 'Failed to save presets' });
+          setIsSavingWeeklyPresets(false);
+          return;
+        }
+      } else {
+        lotteryService.updateWeeklyPresets(editingWeeklyPresets, currentRole);
+      }
+      setPresetFeedback({ type: 'success', message: 'All 7-day weekly presets successfully saved!' });
+      setTimeout(() => setPresetFeedback(null), 3000);
+    } catch (err: any) {
+      setPresetFeedback({ type: 'error', message: err?.message || 'Error saving weekly presets' });
+    } finally {
+      setIsSavingWeeklyPresets(false);
+    }
+  };
+
+  const handleApplyActiveDayPresetToCurrentDraw = async () => {
+    setIsApplyingDayPreset(true);
+    setPresetFeedback(null);
+    try {
+      const tickets = lotteryService.expandPresetTickets(activeDayPresetConfig);
+      if (tickets.length === 0) {
+        setPresetFeedback({ type: 'error', message: `Preset for ${activePresetDay} has no tickets configured.` });
+        setIsApplyingDayPreset(false);
+        return;
+      }
+      if (onAddTicketInventory) {
+        const res = await onAddTicketInventory(
+          tickets,
+          config.businessDate,
+          'col-1',
+          config.seriesTitle || 'CARROM GOLD',
+          'PUBLISHED'
+        );
+        if (res && !res.success) {
+          setPresetFeedback({ type: 'error', message: res.error || 'Failed to publish preset tickets' });
+          setIsApplyingDayPreset(false);
+          return;
+        }
+      } else {
+        lotteryService.addTicketInventory(
+          tickets,
+          config.businessDate,
+          'col-1',
+          config.seriesTitle || 'CARROM GOLD',
+          'PUBLISHED',
+          { id: currentUserUid, name: 'Admin', role: currentRole }
+        );
+      }
+      setInternalInventory(lotteryService.getInventory(config.businessDate, undefined, currentRole));
+      setPresetFeedback({
+        type: 'success',
+        message: `Published ${tickets.length} tickets from ${activePresetDay} preset to ${config.businessDate}!`,
+      });
+      setTimeout(() => setPresetFeedback(null), 4000);
+    } catch (err: any) {
+      setPresetFeedback({ type: 'error', message: err?.message || 'Error applying preset' });
+    } finally {
+      setIsApplyingDayPreset(false);
+    }
+  };
+
+  const handlePublishFullWeek = async () => {
+    setIsPublishingWeek(true);
+    setPresetFeedback(null);
+    try {
+      if (onUpdateWeeklyPresets) {
+        await onUpdateWeeklyPresets(editingWeeklyPresets);
+      } else {
+        lotteryService.updateWeeklyPresets(editingWeeklyPresets, currentRole);
+      }
+
+      let baseDate = new Date();
+      try {
+        const parts = String(config.businessDate || '').trim().split(' ');
+        if (parts.length === 3) {
+          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const mIdx = months.indexOf(parts[1]);
+          if (mIdx !== -1) {
+            const parsed = new Date(parseInt(parts[2], 10), mIdx, parseInt(parts[0], 10));
+            if (!isNaN(parsed.getTime())) baseDate = parsed;
+          }
+        }
+      } catch {}
+
+      const dayNames: DayOfWeek[] = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      let totalPublishedAcrossWeek = 0;
+
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(baseDate);
+        d.setDate(baseDate.getDate() + i);
+
+        const dayStr = String(d.getDate()).padStart(2, '0');
+        const monthStr = months[d.getMonth()];
+        const yearStr = d.getFullYear();
+        const drawDateStr = `${dayStr} ${monthStr} ${yearStr}`;
+        const dayOfWeek = dayNames[d.getDay()];
+
+        const dayPreset = editingWeeklyPresets.days[dayOfWeek];
+        if (dayPreset && dayPreset.enabled) {
+          const tickets = lotteryService.expandPresetTickets(dayPreset);
+          if (tickets.length > 0) {
+            if (onAddTicketInventory) {
+              const res = await onAddTicketInventory(
+                tickets,
+                drawDateStr,
+                'col-1',
+                config.seriesTitle || 'CARROM GOLD',
+                'PUBLISHED'
+              );
+              if (res?.success) {
+                totalPublishedAcrossWeek += res.addedCount || tickets.length;
+              }
+            } else {
+              lotteryService.addTicketInventory(
+                tickets,
+                drawDateStr,
+                'col-1',
+                config.seriesTitle || 'CARROM GOLD',
+                'PUBLISHED',
+                { id: currentUserUid, name: 'Admin', role: currentRole }
+              );
+              totalPublishedAcrossWeek += tickets.length;
+            }
+          }
+        }
+      }
+
+      setInternalInventory(lotteryService.getInventory(config.businessDate, undefined, currentRole));
+      setPresetFeedback({
+        type: 'success',
+        message: `Successfully published full 1-week schedule (${totalPublishedAcrossWeek} tickets across 7 days)!`,
+      });
+      setTimeout(() => setPresetFeedback(null), 5000);
+    } catch (err: any) {
+      setPresetFeedback({ type: 'error', message: err?.message || 'Error publishing full week' });
+    } finally {
+      setIsPublishingWeek(false);
+    }
+  };
+
+  const handleFillTodayPresetIntoAddModal = () => {
+    if (!todayDayPresetConfig || !todayDayPresetConfig.enabled) return;
+    setAddMode(todayDayPresetConfig.mode);
+    if (todayDayPresetConfig.mode === 'range') {
+      setAddRangeStart(todayDayPresetConfig.rangeStart || '0000');
+      setAddRangeEnd(todayDayPresetConfig.rangeEnd || '0099');
+    } else if (todayDayPresetConfig.mode === 'list') {
+      setAddCommaList(todayDayPresetConfig.ticketList || '');
+    } else if (todayDayPresetConfig.mode === 'single') {
+      setAddSingleNumber(todayDayPresetConfig.singleTicket || '');
+    }
+  };
+
   const [addMode, setAddMode] = useState<'single' | 'list' | 'range'>('range');
   const [addSingleNumber, setAddSingleNumber] = useState('');
   const [addCommaList, setAddCommaList] = useState('');
@@ -731,6 +968,20 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                   <Palette className="w-3.5 h-3.5 text-slate-500" />
                   <span>Colors</span>
                 </button>
+                <button
+                  onClick={() => {
+                    if (weeklyPresets) {
+                      setEditingWeeklyPresets(JSON.parse(JSON.stringify(weeklyPresets)));
+                    }
+                    setPresetFeedback(null);
+                    setIsWeeklyPresetsModalOpen(true);
+                  }}
+                  className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-xs"
+                  title="Configure 1-week custom ticket presets for each day of the week"
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Weekly Presets</span>
+                </button>
               </>
             )}
             <button
@@ -1083,6 +1334,17 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                 </div>
               </div>
 
+              {todayDayPresetConfig && todayDayPresetConfig.enabled && todayDayPresetConfig.tickets?.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleFillTodayPresetIntoAddModal}
+                  className="w-full py-2 px-3 rounded-lg bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 font-semibold flex items-center justify-center space-x-1.5 transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Use {currentDayOfWeekName} Preset ({todayDayPresetConfig.tickets.length} tickets)</span>
+                </button>
+              )}
+
               <div>
                 <label className="block font-semibold text-slate-700 mb-1.5">Input Mode</label>
                 <div className="grid grid-cols-3 gap-2">
@@ -1287,6 +1549,328 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
                   Save Settings
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin 1-Week Ticket Presets Modal */}
+      {isWeeklyPresetsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50">
+          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-slate-200 p-5 flex flex-col max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">1-Week Ticket Presets (Daily Custom Schedule)</h3>
+                  <p className="text-[11px] text-slate-500">Configure and store custom ticket ranges for each day of the week.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsWeeklyPresetsModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Feedback alert */}
+            {presetFeedback && (
+              <div
+                className={`mb-4 p-3 rounded-xl text-xs font-semibold flex items-center space-x-2 ${
+                  presetFeedback.type === 'success'
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}
+              >
+                {presetFeedback.type === 'success' ? (
+                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{presetFeedback.message}</span>
+              </div>
+            )}
+
+            {/* 7-Day Week Tabs */}
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-slate-700 mb-2">Select Day of Week to Customize:</label>
+              <div className="grid grid-cols-7 gap-1.5">
+                {DAYS_OF_WEEK.map((day) => {
+                  const dayCfg = editingWeeklyPresets.days[day];
+                  const isSelected = activePresetDay === day;
+                  const isToday = currentDayOfWeekName === day;
+                  const count = dayCfg?.tickets?.length || 0;
+                  const isEnabled = Boolean(dayCfg?.enabled);
+
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => setActivePresetDay(day)}
+                      className={`p-2 rounded-xl border text-center transition-all flex flex-col items-center justify-center relative ${
+                        isSelected
+                          ? 'border-blue-600 bg-blue-600 text-white shadow-xs'
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      {isToday && (
+                        <span
+                          className={`absolute -top-1.5 px-1 py-0.2 rounded-full text-[8px] font-extrabold uppercase ${
+                            isSelected ? 'bg-amber-400 text-slate-900' : 'bg-emerald-600 text-white'
+                          }`}
+                        >
+                          Today
+                        </span>
+                      )}
+                      <span className="text-[11px] font-bold block">{day.slice(0, 3)}</span>
+                      <span
+                        className={`text-[9px] font-mono mt-0.5 px-1 py-0.2 rounded ${
+                          isSelected
+                            ? 'bg-blue-700 text-blue-100'
+                            : isEnabled
+                            ? 'bg-slate-100 text-slate-600'
+                            : 'bg-slate-50 text-slate-400 line-through'
+                        }`}
+                      >
+                        {isEnabled ? `${count}t` : 'off'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Active Day Configuration Card */}
+            <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-4 mb-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <div className="flex items-center space-x-2">
+                  <span className="font-bold text-xs text-slate-900">{activePresetDay} Configuration</span>
+                  {currentDayOfWeekName === activePresetDay && (
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      Today's Day
+                    </span>
+                  )}
+                </div>
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(activeDayPresetConfig.enabled)}
+                    onChange={(e) => handleUpdateActiveDayField({ enabled: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">Enable Preset</span>
+                </label>
+              </div>
+
+              {/* Mode selector */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1.5">Preset Mode:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateActiveDayField({ mode: 'range' })}
+                    className={`py-1.5 px-3 rounded-lg border text-xs font-semibold transition-colors ${
+                      activeDayPresetConfig.mode === 'range'
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Number Range
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateActiveDayField({ mode: 'list' })}
+                    className={`py-1.5 px-3 rounded-lg border text-xs font-semibold transition-colors ${
+                      activeDayPresetConfig.mode === 'list'
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Comma List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateActiveDayField({ mode: 'single' })}
+                    className={`py-1.5 px-3 rounded-lg border text-xs font-semibold transition-colors ${
+                      activeDayPresetConfig.mode === 'single'
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Single Ticket
+                  </button>
+                </div>
+              </div>
+
+              {/* Inputs depending on mode */}
+              {activeDayPresetConfig.mode === 'range' && (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Start Number:</label>
+                      <input
+                        type="text"
+                        maxLength={4}
+                        value={activeDayPresetConfig.rangeStart || '0000'}
+                        onChange={(e) => handleUpdateActiveDayField({ rangeStart: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:outline-none focus:border-blue-600 bg-white"
+                        placeholder="0000"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">End Number:</label>
+                      <input
+                        type="text"
+                        maxLength={4}
+                        value={activeDayPresetConfig.rangeEnd || '0099'}
+                        onChange={(e) => handleUpdateActiveDayField({ rangeEnd: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:outline-none focus:border-blue-600 bg-white"
+                        placeholder="0099"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick range chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] font-bold text-slate-500 mr-1">Quick:</span>
+                    {[
+                      { label: '0000-0099 (100)', start: '0000', end: '0099' },
+                      { label: '0000-0249 (250)', start: '0000', end: '0249' },
+                      { label: '0000-0499 (500)', start: '0000', end: '0499' },
+                      { label: '0000-0999 (1000)', start: '0000', end: '0999' },
+                    ].map((presetRange) => (
+                      <button
+                        key={presetRange.label}
+                        type="button"
+                        onClick={() =>
+                          handleUpdateActiveDayField({
+                            rangeStart: presetRange.start,
+                            rangeEnd: presetRange.end,
+                          })
+                        }
+                        className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 transition-colors"
+                      >
+                        {presetRange.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeDayPresetConfig.mode === 'list' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Comma or Space Separated Numbers:
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={activeDayPresetConfig.ticketList || ''}
+                    onChange={(e) => handleUpdateActiveDayField({ ticketList: e.target.value })}
+                    placeholder="e.g. 0001, 0002, 0005, 0010, 0025..."
+                    className="w-full p-2.5 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-600 bg-white"
+                  />
+                </div>
+              )}
+
+              {activeDayPresetConfig.mode === 'single' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Single Ticket Number:</label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    value={activeDayPresetConfig.singleTicket || ''}
+                    onChange={(e) => handleUpdateActiveDayField({ singleTicket: e.target.value })}
+                    placeholder="0042"
+                    className="w-32 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:outline-none focus:border-blue-600 bg-white"
+                  />
+                </div>
+              )}
+
+              {/* Tickets Summary & Preview */}
+              <div className="pt-2 border-t border-slate-200 flex flex-col space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-600">
+                    Calculated Tickets: <strong className="text-slate-900">{activeDayPresetConfig.tickets?.length || 0}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isApplyingDayPreset || !activeDayPresetConfig.enabled || activeDayPresetConfig.tickets?.length === 0}
+                    onClick={handleApplyActiveDayPresetToCurrentDraw}
+                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-[11px] font-bold rounded-lg transition-colors flex items-center space-x-1 shadow-xs"
+                    title={`Immediately apply ${activePresetDay} tickets to current draw date (${config.businessDate})`}
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Apply to Current Draw ({config.businessDate})</span>
+                  </button>
+                </div>
+
+                {activeDayPresetConfig.tickets && activeDayPresetConfig.tickets.length > 0 && (
+                  <div className="max-h-20 overflow-y-auto p-2 bg-white rounded-lg border border-slate-200 flex flex-wrap gap-1">
+                    {activeDayPresetConfig.tickets.slice(0, 30).map((t) => (
+                      <span key={t} className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-mono text-slate-700">
+                        {t}
+                      </span>
+                    ))}
+                    {activeDayPresetConfig.tickets.length > 30 && (
+                      <span className="px-1.5 py-0.5 text-[10px] text-slate-400 font-semibold">
+                        +{activeDayPresetConfig.tickets.length - 30} more...
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 1-Week Schedule Publish Card */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-bold text-xs text-blue-900 flex items-center space-x-1.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Publish Full 7-Day Week Schedule</span>
+                </h4>
+                <p className="text-[11px] text-blue-700 mt-0.5">
+                  Takes all enabled daily presets and publishes tickets across the 7 consecutive draw dates starting from today.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isPublishingWeek}
+                onClick={handlePublishFullWeek}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-xs font-bold rounded-xl transition-all shadow-xs flex items-center justify-center space-x-1.5 shrink-0"
+              >
+                {isPublishingWeek ? (
+                  <span>Publishing 7 Days...</span>
+                ) : (
+                  <>
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Publish 7 Days Now</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsWeeklyPresetsModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={isSavingWeeklyPresets}
+                onClick={handleSaveWeeklyPresets}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-500 text-white text-xs font-bold rounded-xl transition-colors shadow-xs flex items-center space-x-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{isSavingWeeklyPresets ? 'Saving Presets...' : 'Save All Weekly Presets'}</span>
+              </button>
             </div>
           </div>
         </div>

@@ -159,6 +159,111 @@ export const DEFAULT_GRID_APPEARANCE: GridAppearanceConfig = {
   borderColor: '#cbd5e1',
 };
 
+export type DayOfWeek = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
+
+export interface DayTicketPreset {
+  dayName: DayOfWeek;
+  enabled: boolean;
+  mode: 'range' | 'list' | 'single';
+  rangeStart: string;
+  rangeEnd: string;
+  ticketList: string;
+  singleTicket: string;
+  tickets: string[];
+}
+
+export interface WeeklyTicketPresetsConfig {
+  days: Record<DayOfWeek, DayTicketPreset>;
+  lastPublishedWeekStart?: string;
+  updatedAtIso?: string;
+  updatedByUid?: string;
+}
+
+export const DAYS_OF_WEEK: DayOfWeek[] = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+];
+
+export const DEFAULT_WEEKLY_PRESETS: WeeklyTicketPresetsConfig = {
+  days: {
+    Monday: {
+      dayName: 'Monday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0099',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Tuesday: {
+      dayName: 'Tuesday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0099',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Wednesday: {
+      dayName: 'Wednesday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0099',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Thursday: {
+      dayName: 'Thursday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0099',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Friday: {
+      dayName: 'Friday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0099',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Saturday: {
+      dayName: 'Saturday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0199',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+    Sunday: {
+      dayName: 'Sunday',
+      enabled: true,
+      mode: 'range',
+      rangeStart: '0000',
+      rangeEnd: '0249',
+      ticketList: '',
+      singleTicket: '',
+      tickets: [],
+    },
+  },
+};
+
 export interface TodayWinnerRecord {
   id: string;
   drawDate: string;

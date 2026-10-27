@@ -64,6 +64,11 @@ import {
   TicketInventoryItem,
   GridAppearanceConfig,
   DEFAULT_GRID_APPEARANCE,
+  WeeklyTicketPresetsConfig,
+  DayTicketPreset,
+  DEFAULT_WEEKLY_PRESETS,
+  DAYS_OF_WEEK,
+  DayOfWeek,
 } from './types';
 import {
   DEFAULT_CONFIG,
@@ -2326,6 +2331,129 @@ class LiveFirebaseService {
       }
     }
     return { success: true, config: lotteryService.getGridAppearance() };
+  }
+
+  public subscribeWeeklyPresetsFirestore(
+    onUpdate: (presets: WeeklyTicketPresetsConfig) => void,
+    onError?: (err: Error) => void
+  ): () => void {
+    const { db } = initFirebase();
+    let currentPresets: WeeklyTicketPresetsConfig = lotteryService.getWeeklyPresets();
+
+    const emit = () => {
+      onUpdate(currentPresets);
+    };
+
+    emit();
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      currentPresets = lotteryService.getWeeklyPresets();
+      emit();
+    });
+
+    let unsubFirestore = () => {};
+    if (db) {
+      try {
+        const docRef = doc(db, 'config', 'weeklyPresets');
+        unsubFirestore = onSnapshot(
+          docRef,
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data() as any;
+              if (data && data.days) {
+                currentPresets = {
+                  ...DEFAULT_WEEKLY_PRESETS,
+                  ...data,
+                  days: {
+                    ...DEFAULT_WEEKLY_PRESETS.days,
+                    ...data.days,
+                  },
+                };
+                lotteryService.updateWeeklyPresets(currentPresets, 'admin');
+                emit();
+              }
+            }
+          },
+          (err) => {
+            console.warn('[Firestore] Error in weeklyPresets subscription:', err);
+            if (onError) onError(err);
+          }
+        );
+      } catch (err: any) {
+        console.warn('[Firestore] Failed to attach weeklyPresets listener:', err);
+        if (onError) onError(err);
+      }
+    }
+
+    return () => {
+      unsubLocal();
+      unsubFirestore();
+    };
+  }
+
+  public async saveWeeklyPresetsFirestore(
+    presets: WeeklyTicketPresetsConfig,
+    operatorRole: LoginType
+  ): Promise<{ success: boolean; presets?: WeeklyTicketPresetsConfig; error?: string }> {
+    if (operatorRole !== 'admin') {
+      return { success: false, error: 'Only Admins can modify weekly ticket presets.' };
+    }
+    const { db } = initFirebase();
+    const localRes = lotteryService.updateWeeklyPresets(presets, operatorRole);
+    if (!localRes.success) {
+      return localRes;
+    }
+
+    if (db) {
+      try {
+        const docRef = doc(db, 'config', 'weeklyPresets');
+        await setDoc(
+          docRef,
+          {
+            ...presets,
+            updatedAtIso: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err: any) {
+        console.warn('[Firestore] Failed to write weeklyPresets to Firestore:', err);
+      }
+    }
+    return { success: true, presets: lotteryService.getWeeklyPresets() };
+  }
+
+  public async publishWeeklyPresetForDateFirestore(
+    drawDate: string,
+    dayName: DayOfWeek,
+    seriesId: string,
+    seriesTitle: string,
+    operator: { id: string; name: string; role: LoginType }
+  ): Promise<{ success: boolean; addedCount: number; error?: string }> {
+    if (operator.role !== 'admin') {
+      return { success: false, addedCount: 0, error: 'Only Admins can publish ticket inventory.' };
+    }
+    const presets = lotteryService.getWeeklyPresets();
+    const dayPreset = presets.days[dayName];
+    if (!dayPreset || !dayPreset.enabled) {
+      return { success: false, addedCount: 0, error: `Preset for ${dayName} is disabled or empty.` };
+    }
+    const tickets = lotteryService.expandPresetTickets(dayPreset);
+    if (tickets.length === 0) {
+      return { success: false, addedCount: 0, error: `No tickets configured in ${dayName} preset.` };
+    }
+
+    const res = await this.addTicketInventoryFirestore(
+      tickets,
+      drawDate,
+      seriesId,
+      seriesTitle,
+      'PUBLISHED',
+      operator
+    );
+    return {
+      success: res.success,
+      addedCount: res.addedCount || 0,
+      error: res.error,
+    };
   }
 
   public async addTicketInventoryFirestore(

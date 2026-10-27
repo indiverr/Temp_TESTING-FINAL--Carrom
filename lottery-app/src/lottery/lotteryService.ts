@@ -12,6 +12,11 @@ import {
   TicketInventoryItem,
   GridAppearanceConfig,
   DEFAULT_GRID_APPEARANCE,
+  WeeklyTicketPresetsConfig,
+  DayTicketPreset,
+  DEFAULT_WEEKLY_PRESETS,
+  DAYS_OF_WEEK,
+  DayOfWeek,
 } from './types';
 import { LOTTERY_COLUMNS_SPEC } from './mockData';
 
@@ -27,6 +32,7 @@ const STORAGE_KEYS = {
   IDEMPOTENCY: 'carrom_lottery_booking_idempotency_v2',
   INVENTORY: 'carrom_lottery_inventory_v2',
   APPEARANCE: 'carrom_lottery_appearance_v2',
+  WEEKLY_PRESETS: 'carrom_lottery_weekly_presets_v1',
 };
 
 export const TICKET_LOCK_DURATION_MS = 2 * 60 * 1000; // 2 minutes (120 seconds)
@@ -173,6 +179,7 @@ class LotteryDatabaseService {
   private inMemoryLocks: Map<string, TicketLock> = new Map();
   private inMemoryInventory: Map<string, TicketInventoryItem> = new Map();
   private inMemoryAppearance: GridAppearanceConfig = DEFAULT_GRID_APPEARANCE;
+  private inMemoryWeeklyPresets: WeeklyTicketPresetsConfig = DEFAULT_WEEKLY_PRESETS;
   private inMemoryIdempotency: Map<string, any> = new Map();
   private lastCustomerSerial: number = CUSTOMER_CODE_BASE;
   private listeners: Set<() => void> = new Set();
@@ -256,6 +263,15 @@ class LotteryDatabaseService {
       const storedApp = localStorage.getItem(STORAGE_KEYS.APPEARANCE);
       if (storedApp) {
         this.inMemoryAppearance = JSON.parse(storedApp);
+      }
+      const storedPresets = localStorage.getItem(STORAGE_KEYS.WEEKLY_PRESETS);
+      if (storedPresets) {
+        try {
+          const parsedPresets = JSON.parse(storedPresets);
+          if (parsedPresets && parsedPresets.days) {
+            this.inMemoryWeeklyPresets = parsedPresets;
+          }
+        } catch {}
       }
       const storedCounter = localStorage.getItem(STORAGE_KEYS.CUSTOMER_COUNTER);
       if (storedCounter) {
@@ -1437,6 +1453,122 @@ class LotteryDatabaseService {
     this.saveAppearance();
     this.broadcastUpdate();
     return { success: true, config: this.inMemoryAppearance };
+  }
+
+  public getWeeklyPresets(): WeeklyTicketPresetsConfig {
+    return JSON.parse(JSON.stringify(this.inMemoryWeeklyPresets));
+  }
+
+  public expandPresetTickets(preset: DayTicketPreset): string[] {
+    if (!preset || !preset.enabled) return [];
+    const ticketsSet = new Set<string>();
+
+    if (preset.mode === 'range') {
+      const s = parseInt(preset.rangeStart || '0', 10);
+      const e = parseInt(preset.rangeEnd || '99', 10);
+      if (!isNaN(s) && !isNaN(e) && s <= e) {
+        const start = Math.max(0, Math.min(s, 9999));
+        const end = Math.max(0, Math.min(e, 9999));
+        for (let i = start; i <= end; i++) {
+          ticketsSet.add(String(i).padStart(4, '0'));
+        }
+      }
+    } else if (preset.mode === 'list') {
+      const items = String(preset.ticketList || '')
+        .split(/[\s,]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+      for (const item of items) {
+        const num = parseInt(item, 10);
+        if (!isNaN(num) && num >= 0 && num <= 9999) {
+          ticketsSet.add(String(num).padStart(4, '0'));
+        }
+      }
+    } else if (preset.mode === 'single') {
+      const num = parseInt(String(preset.singleTicket || '').trim(), 10);
+      if (!isNaN(num) && num >= 0 && num <= 9999) {
+        ticketsSet.add(String(num).padStart(4, '0'));
+      }
+    }
+
+    return Array.from(ticketsSet).sort();
+  }
+
+  public updateWeeklyPresets(
+    config: Partial<WeeklyTicketPresetsConfig>,
+    operatorRole: LoginType
+  ): { success: boolean; presets: WeeklyTicketPresetsConfig; error?: string } {
+    if (operatorRole !== 'admin') {
+      return { success: false, presets: this.inMemoryWeeklyPresets, error: 'Only Admins can update weekly ticket presets.' };
+    }
+
+    const updatedDays = { ...this.inMemoryWeeklyPresets.days };
+    if (config.days) {
+      for (const day of DAYS_OF_WEEK) {
+        if (config.days[day]) {
+          const incoming = config.days[day];
+          const expanded = this.expandPresetTickets(incoming);
+          updatedDays[day] = {
+            ...updatedDays[day],
+            ...incoming,
+            tickets: expanded,
+          };
+        }
+      }
+    }
+
+    this.inMemoryWeeklyPresets = {
+      ...this.inMemoryWeeklyPresets,
+      ...config,
+      days: updatedDays,
+      updatedAtIso: new Date().toISOString(),
+    };
+
+    this.saveWeeklyPresets();
+    this.broadcastUpdate();
+    return { success: true, presets: this.inMemoryWeeklyPresets };
+  }
+
+  public updateDayPreset(
+    dayName: DayOfWeek,
+    preset: Partial<DayTicketPreset>,
+    operatorRole: LoginType
+  ): { success: boolean; presets: WeeklyTicketPresetsConfig; error?: string } {
+    if (operatorRole !== 'admin') {
+      return { success: false, presets: this.inMemoryWeeklyPresets, error: 'Only Admins can update weekly ticket presets.' };
+    }
+
+    const currentDay = this.inMemoryWeeklyPresets.days[dayName] || DEFAULT_WEEKLY_PRESETS.days[dayName];
+    const merged: DayTicketPreset = {
+      ...currentDay,
+      ...preset,
+      dayName,
+    };
+    merged.tickets = this.expandPresetTickets(merged);
+
+    this.inMemoryWeeklyPresets = {
+      ...this.inMemoryWeeklyPresets,
+      days: {
+        ...this.inMemoryWeeklyPresets.days,
+        [dayName]: merged,
+      },
+      updatedAtIso: new Date().toISOString(),
+    };
+
+    this.saveWeeklyPresets();
+    this.broadcastUpdate();
+    return { success: true, presets: this.inMemoryWeeklyPresets };
+  }
+
+  private saveWeeklyPresets() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(
+          STORAGE_KEYS.WEEKLY_PRESETS,
+          JSON.stringify(this.inMemoryWeeklyPresets)
+        );
+      }
+    } catch (e) {}
   }
 
   public confirmPendingBooking(
