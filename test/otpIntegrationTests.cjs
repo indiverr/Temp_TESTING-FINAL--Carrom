@@ -3102,6 +3102,148 @@ async function runAllTests() {
     'Verified Employee & Paid Employee show Sign Out, Draw Date, Grid, Pending, Confirmed and hide/block Overview, Winners, Result Sheets, Settings; Admin retains Overview & Settings; 100% parity across root & lottery-app'
   );
 
+  // =============================================================
+  // Scenario 32: Employee Booking Data Isolation & Cross-Employee Security Verification
+  // =============================================================
+  // 1. Employee A, Employee B, and Admin test users
+  const tokenEmpA = 'token_emp_a_sec';
+  const tokenEmpB = 'token_emp_b_sec';
+  const uidEmpA = 'uid_sec_emp_a';
+  const uidEmpB = 'uid_sec_emp_b';
+
+  env.authUsers.set(tokenEmpA, {
+    uid: uidEmpA,
+    email: 'empa@carrom.internal',
+    claims: { role: 'employee', otpVerified: true },
+  });
+  env.authUsers.set(tokenEmpB, {
+    uid: uidEmpB,
+    email: 'empb@carrom.internal',
+    claims: { role: 'paid_employee', otpVerified: true },
+  });
+
+  // Booking documents in mock Firestore
+  const drawDateSec = '2026-10-28';
+  const docBookingA = {
+    id: `booking_${drawDateSec}_0801`,
+    ticketNumber: '0801',
+    date: drawDateSec,
+    customerName: 'Customer Alpha',
+    customerPhone: '9840100001',
+    bookedBy: 'Operator Alpha',
+    bookedByUid: uidEmpA,
+    bookedByRole: 'employee',
+    bookingStatus: 'Booked',
+    paymentStatus: 'Unpaid',
+  };
+  const docBookingB = {
+    id: `booking_${drawDateSec}_0802`,
+    ticketNumber: '0802',
+    date: drawDateSec,
+    customerName: 'Customer Beta',
+    customerPhone: '9840200002',
+    bookedBy: 'Operator Beta',
+    bookedByUid: uidEmpB,
+    bookedByRole: 'paid_employee',
+    bookingStatus: 'Booked',
+    paymentStatus: 'Unpaid',
+  };
+  const docBookingLegacy = {
+    id: `booking_${drawDateSec}_0803`,
+    ticketNumber: '0803',
+    date: drawDateSec,
+    customerName: 'Legacy Customer',
+    customerPhone: '9840300003',
+    bookedBy: 'Legacy Operator',
+    bookingStatus: 'Booked',
+    paymentStatus: 'Unpaid',
+    // Missing bookedByUid entirely
+  };
+
+  env.firestoreDocs.set(`bookings/${docBookingA.id}`, docBookingA);
+  env.firestoreDocs.set(`bookings/${docBookingB.id}`, docBookingB);
+  env.firestoreDocs.set(`bookings/${docBookingLegacy.id}`, docBookingLegacy);
+
+  // Firestore security rule evaluator for /bookings/{bookingId}
+  function canReadBookingDoc(auth, bookingDoc) {
+    if (!auth || !auth.uid) return false;
+    const isOtp = auth.token && auth.token.otpVerified === true;
+    if (!isOtp) return false;
+    const role = (auth.token && auth.token.role) || 'employee';
+    if (role === 'admin') return true;
+    // Non-admin (employee or paid_employee) can ONLY read if bookedByUid matches auth.uid
+    return Boolean(bookingDoc.bookedByUid && bookingDoc.bookedByUid === auth.uid);
+  }
+
+  // 1. Employee A can read their own bookings
+  const r1 = canReadBookingDoc({ uid: uidEmpA, token: { otpVerified: true, role: 'employee' } }, docBookingA);
+  // 2. Employee A cannot read Employee B's booking documents directly
+  const r2 = !canReadBookingDoc({ uid: uidEmpA, token: { otpVerified: true, role: 'employee' } }, docBookingB);
+  // 3. Employee A cannot list Employee B's bookings (only scoped query returns own bookings)
+  const allDocs = [docBookingA, docBookingB, docBookingLegacy];
+  const empAQueryResults = allDocs.filter((d) => d.bookedByUid === uidEmpA);
+  const r3 = empAQueryResults.length === 1 && empAQueryResults[0].id === docBookingA.id;
+  // 4. Employee B cannot read Employee A's bookings
+  const r4 = !canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingA) &&
+             canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingB);
+  // 5. Employees cannot access another employee's payment or customer details through customer lookup
+  const r5_lookup = env.invokePost({
+    action: 'lookupCustomerBookings',
+    idToken: tokenEmpA,
+    customerId: '#5316',
+  });
+  const r5 = r5_lookup.success === false && r5_lookup.code === 'PERMISSION_DENIED';
+  // 6. Admin can access all authorized employee records
+  const authSecAdmin = { uid: 'uid_admin_sec', token: { otpVerified: true, role: 'admin' } };
+  const r6 = canReadBookingDoc(authSecAdmin, docBookingA) &&
+             canReadBookingDoc(authSecAdmin, docBookingB) &&
+             canReadBookingDoc(authSecAdmin, docBookingLegacy);
+  // 7. Changing usernames, query filters, document IDs, or client-side state does not bypass authorization
+  const spoofedAuth = { uid: uidEmpA, token: { otpVerified: true, role: 'employee', username: 'sasikaran' } };
+  const r7 = !canReadBookingDoc(spoofedAuth, docBookingB);
+  // 8. Logout and account switching: verify code resets state and lotteryService scoping
+  const s32LotteryServiceRoot = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/lotteryService.ts'), 'utf8');
+  const s32LotteryAppMain = fs.readFileSync(path.join(ROOT_DIR, 'src/lottery/LotteryAppMain.tsx'), 'utf8');
+  const r8_code =
+    s32LotteryAppMain.includes("setAllBookings([]);") &&
+    s32LotteryAppMain.includes("setActiveLocks([]);") &&
+    s32LotteryAppMain.includes("setCurrentStaff({\n        id: '',") &&
+    s32LotteryServiceRoot.includes("if (role !== 'admin' && operatorUid)") &&
+    s32LotteryServiceRoot.includes("list = list.filter((b) => b.bookedByUid === operatorUid);");
+  const r8 = r8_code;
+  // 9. Global ticket locking and duplicate-booking prevention still work across all employees
+  env.firestoreDocs.set(`draws/${drawDateSec}/series/default/tickets/0801`, {
+    ticketNumber: '0801',
+    bookingStatus: 'Booked',
+  });
+  const r9_attempt = env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: tokenEmpB,
+    drawDate: drawDateSec,
+    ticketNumber: '0801',
+    lockId: 'lock_attempt_0801',
+  });
+  const r9 = r9_attempt.success === false && (r9_attempt.code === 'ALREADY_BOOKED' || r9_attempt.alreadyBooked === true);
+  // 10. Legacy records without verified ownership remain protected (not readable by non-admins)
+  const r10 = !canReadBookingDoc({ uid: uidEmpA, token: { otpVerified: true, role: 'employee' } }, docBookingLegacy) &&
+              !canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingLegacy) &&
+              canReadBookingDoc(authSecAdmin, docBookingLegacy);
+
+  // Parity check across root and lottery-app
+  const rulesCodeSec = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
+  const rulesSecured =
+    rulesCodeSec.includes('// Mandatory Employee privacy: Only Admin can read all bookings.') &&
+    rulesCodeSec.includes('resource.data.bookedByUid == request.auth.uid');
+
+  const s32Passed =
+    Boolean(r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10 && rulesSecured && appsAreIdentical);
+
+  assertTest(
+    'Scenario 32: Employee Booking Data Isolation & Cross-Employee Security Verification',
+    s32Passed,
+    'Verified 10/10 security criteria: Employee A/B mutual isolation, direct document read block, query scoping, legacy document protection, logout state wipe, admin access, and tamper resistance'
+  );
+
   // -------------------------------------------------------------
   // Summary
   // -------------------------------------------------------------

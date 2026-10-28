@@ -119,10 +119,9 @@ service cloud.firestore {
 
     // 4. Bookings Collection
     match /bookings/{bookingId} {
-      // Mandatory Employee privacy: Employees can only read their own private bookings. Admin and Paid Employee can read all.
+      // Mandatory Employee privacy: Only Admin can read all bookings. Employees (including Paid Employees) can only read their own private bookings.
       allow read: if isOtpVerified() && (
         isAdmin() ||
-        isPaidEmployee() ||
         resource.data.bookedByUid == request.auth.uid
       );
       // Confirmed bookings are created exclusively by the trusted Apps Script backend (Service Account).

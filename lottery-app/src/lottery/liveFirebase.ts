@@ -1098,17 +1098,33 @@ class LiveFirebaseService {
   }
 
   /**
-   * Fetch active bookings from Firestore for a draw date
+   * Fetch active bookings from Firestore for a draw date (scoped by role & operatorUid)
    */
-  public async fetchBookingsFirestore(drawDate: string): Promise<TicketBooking[]> {
-    const { db } = initFirebase();
-    if (!db) return lotteryService.getBookings();
+  public async fetchBookingsFirestore(
+    drawDate: string,
+    role?: LoginType,
+    operatorUid?: string
+  ): Promise<TicketBooking[]> {
+    const { db, auth } = initFirebase();
+    const effectiveUid = operatorUid || auth?.currentUser?.uid || this.status.currentUser?.uid || '';
+    if (!db) return lotteryService.getBookings(drawDate, role, effectiveUid);
 
     try {
-      const q = query(
-        collection(db, 'bookings'),
-        where('date', '==', drawDate)
-      );
+      const q =
+        role === 'admin'
+          ? query(collection(db, 'bookings'), where('date', '==', drawDate))
+          : effectiveUid
+          ? query(
+              collection(db, 'bookings'),
+              where('date', '==', drawDate),
+              where('bookedByUid', '==', effectiveUid)
+            )
+          : null;
+
+      if (!q) {
+        return lotteryService.getBookings(drawDate, role, effectiveUid);
+      }
+
       const snap = await getDocs(q);
       const firestoreBookings = snap.docs
         .map((docSnap) => this.normalizeFirestoreBooking({ id: docSnap.id, ...(docSnap.data() as any) }))
@@ -1117,10 +1133,10 @@ class LiveFirebaseService {
       if (firestoreBookings.length > 0) {
         return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
       }
-      return lotteryService.getBookings();
+      return lotteryService.getBookings(drawDate, role, effectiveUid);
     } catch (err) {
       console.error('[Firestore] fetchBookings error:', err);
-      return lotteryService.getBookings();
+      return lotteryService.getBookings(drawDate, role, effectiveUid);
     }
   }
 
@@ -1134,11 +1150,15 @@ class LiveFirebaseService {
     role?: LoginType,
     operatorUid?: string
   ): () => void {
-    const { db } = initFirebase();
+    const { db, auth } = initFirebase();
+    const effectiveUid = operatorUid || auth?.currentUser?.uid || this.status.currentUser?.uid || '';
+    operatorUid = effectiveUid;
     let firestoreBookings: TicketBooking[] = [];
 
     const emitMerged = () => {
-      const localBookings = lotteryService.getBookings(drawDate, role, operatorUid).filter((b) => b.date === drawDate || !b.date);
+      const localBookings = lotteryService
+        .getBookings(drawDate, role, operatorUid)
+        .filter((b) => b.date === drawDate || !b.date);
       if (firestoreBookings.length === 0) {
         onUpdate(lotteryService.ensureLegacyCustomerIds(localBookings));
         return;
@@ -1166,15 +1186,22 @@ class LiveFirebaseService {
       return () => unsubLocal();
     }
 
-    // Privacy guard: Employees query only their own bookings
+    // Privacy guard: Only Admin can query all bookings; Employees and Paid Employees query only their own bookings
     const q =
-      role === 'employee' && operatorUid
+      role === 'admin'
+        ? query(collection(db, 'bookings'), where('date', '==', drawDate))
+        : operatorUid
         ? query(
             collection(db, 'bookings'),
             where('date', '==', drawDate),
             where('bookedByUid', '==', operatorUid)
           )
-        : query(collection(db, 'bookings'), where('date', '==', drawDate));
+        : null;
+
+    if (!q) {
+      emitMerged();
+      return () => unsubLocal();
+    }
 
     const unsubFirestore = onSnapshot(
       q,

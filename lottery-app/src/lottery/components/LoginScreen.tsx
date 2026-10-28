@@ -20,7 +20,7 @@ import { liveFirebase } from '../liveFirebase';
 import { getFirebaseConfigDiagnostics } from '../firebaseConfig';
 
 interface LoginScreenProps {
-  onLoginSuccess: (type: LoginType, name: string) => void;
+  onLoginSuccess: (type: LoginType, name: string, uid?: string) => void;
   initialMode?: 'credentials' | 'signup';
 }
 
@@ -164,7 +164,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       }
 
       // Normal login requires only username/email and password (no OTP on first or subsequent logins)
-      onLoginSuccess(res.user.role, res.user.name);
+      onLoginSuccess(res.user.role, res.user.name, res.user.uid);
     } finally {
       setIsLoading(false);
     }

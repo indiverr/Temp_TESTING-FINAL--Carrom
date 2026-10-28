@@ -77,15 +77,11 @@ export const LotteryAppMain: React.FC = () => {
   const [currentRole, setCurrentRole] = useState<LoginType>('employee');
   const [isAuthenticatedAndVerified, setIsAuthenticatedAndVerified] = useState<boolean>(false);
 
-  // Bookings state
-  const [allBookings, setAllBookings] = useState<TicketBooking[]>(() =>
-    lotteryService.getBookings()
-  );
+  // Bookings state - isolated to authenticated operator session (empty on initial mount)
+  const [allBookings, setAllBookings] = useState<TicketBooking[]>([]);
 
   // Real-time Ticket Locks state
-  const [activeLocks, setActiveLocks] = useState<TicketLock[]>(() =>
-    lotteryService.getActiveLocks(config.businessDate)
-  );
+  const [activeLocks, setActiveLocks] = useState<TicketLock[]>([]);
 
   // Cross-screen filter query
   const [dashboardSearchQuery, setDashboardSearchQuery] = useState<string>('');
@@ -114,15 +110,16 @@ export const LotteryAppMain: React.FC = () => {
 
   // Sync state helper
   const reloadData = async () => {
+    const effectiveUid = currentStaff.id || liveFirebase.getStatus().currentUser?.uid || '';
     if (isLiveFirebaseMode) {
       try {
         const [fbBookings, fbWinners, fbPapers, fbConfig] = await Promise.all([
-          liveFirebase.fetchBookingsFirestore(config.businessDate),
+          liveFirebase.fetchBookingsFirestore(config.businessDate, currentRole, effectiveUid),
           liveFirebase.fetchWinnersFirestore(config.businessDate),
           liveFirebase.fetchResultPapersFirestore(config.businessDate),
           liveFirebase.fetchConfigFirestore(),
         ]);
-        if (fbBookings.length > 0) setAllBookings(fbBookings);
+        if (fbBookings) setAllBookings(fbBookings);
         if (fbWinners.length > 0) setWinners(fbWinners);
         if (fbPapers.length > 0) setPapers(fbPapers);
         if (fbConfig) setConfig(fbConfig);
@@ -132,27 +129,59 @@ export const LotteryAppMain: React.FC = () => {
       return;
     }
 
-    setAllBookings(lotteryService.getBookings());
+    setAllBookings(lotteryService.getBookings(config.businessDate, currentRole, effectiveUid));
     setActiveLocks(lotteryService.getActiveLocks(config.businessDate));
     setWinners(lotteryService.getWinners());
     setPapers(lotteryService.getResultPapers());
     setConfig(lotteryService.getConfig());
   };
 
+  // Hardware back button support for Android native
+  useEffect(() => {
+    const handleBackButton = (e: Event) => {
+      e.preventDefault();
+      if (isGalleryOpen) {
+        setIsGalleryOpen(false);
+      } else if (['dashboard', 'unpaid', 'paid', 'winners', 'papers', 'settings'].includes(currentScreen)) {
+        setCurrentScreen('inventory');
+      } else if (currentScreen === 'inventory') {
+        setCurrentScreen('enter-date');
+      }
+    };
+
+    document.addEventListener('backbutton', handleBackButton);
+    return () => {
+      document.removeEventListener('backbutton', handleBackButton);
+    };
+  }, [isGalleryOpen, currentScreen]);
+
   // Real-time Firestore sync listener when in live Firebase mode and verified
   useEffect(() => {
-    if (!isLiveFirebaseMode || !isAuthenticatedAndVerified) return;
-    const unsubscribe = liveFirebase.subscribeBookingsFirestore(
-      config.businessDate,
-      (bookings) => {
-        setAllBookings(bookings);
-      },
-      (err) => {
-        showToast(`[Firestore Sync Error] ${err.message}`);
-      }
-    );
-    return () => unsubscribe();
-  }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate]);
+    if (!isAuthenticatedAndVerified) {
+      setAllBookings([]);
+      return;
+    }
+    const effectiveUid = currentStaff.id || liveFirebase.getStatus().currentUser?.uid || '';
+    if (isLiveFirebaseMode) {
+      const unsubscribe = liveFirebase.subscribeBookingsFirestore(
+        config.businessDate,
+        (bookings) => {
+          setAllBookings(bookings);
+        },
+        (err) => {
+          showToast(`[Firestore Sync Error] ${err.message}`);
+        },
+        currentRole,
+        effectiveUid
+      );
+      return () => unsubscribe();
+    }
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      setAllBookings(lotteryService.getBookings(config.businessDate, currentRole, effectiveUid));
+    });
+    setAllBookings(lotteryService.getBookings(config.businessDate, currentRole, effectiveUid));
+    return () => unsubLocal();
+  }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate, currentRole, currentStaff.id]);
 
 
   // Real-time Inventory & Appearance subscription
@@ -234,6 +263,16 @@ export const LotteryAppMain: React.FC = () => {
       setIsAuthenticatedAndVerified(false);
       setAuthInitialMode('credentials');
       setCurrentScreen('login');
+      // Wipe session state so previous user's records never linger
+      setAllBookings([]);
+      setActiveLocks([]);
+      setCurrentRole('employee');
+      setCurrentStaff({
+        id: '',
+        name: '',
+        phone: '',
+        role: 'employee',
+      });
       return;
     }
     if (!isAuthenticatedAndVerified) {
@@ -272,16 +311,23 @@ export const LotteryAppMain: React.FC = () => {
   };
 
   // Handlers
-  const handleLoginSuccess = (type: LoginType, name: string) => {
+  const handleLoginSuccess = (type: LoginType, name: string, uid?: string) => {
+    const authUid =
+      uid ||
+      liveFirebase.getStatus().currentUser?.uid ||
+      (type === 'admin' ? 'ADM001' : type === 'paid_employee' ? 'PEM001' : 'EMP001');
+
     setCurrentRole(type);
     setCurrentStaff({
-      id: type === 'admin' ? 'ADM001' : type === 'paid_employee' ? 'PEM001' : 'EMP001',
+      id: authUid,
       name: name || (type === 'admin' ? 'Sasikaran' : 'Sasikaran'),
       phone: '9949311900',
       role: type,
       otpVerified: true,
     });
     setIsAuthenticatedAndVerified(true);
+    // Explicitly reset bookings so no stale records from any previous session linger
+    setAllBookings([]);
     // Advance to Enter Date screen
     setCurrentScreen('enter-date');
   };

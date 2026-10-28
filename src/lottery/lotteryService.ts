@@ -500,8 +500,10 @@ class LotteryDatabaseService {
     let list = date
       ? this.inMemoryBookings.filter((b) => b.date === date)
       : this.inMemoryBookings;
-    if (role === 'employee' && operatorUid) {
+    if (role !== 'admin' && operatorUid) {
       list = list.filter((b) => b.bookedByUid === operatorUid);
+    } else if (role !== 'admin' && !operatorUid && role !== undefined) {
+      return [];
     }
     return [...list];
   }
@@ -1110,7 +1112,7 @@ class LotteryDatabaseService {
         paymentStatus: 'Unpaid',
         bookedBy: performedBy,
         bookedByUsername: options?.bookedByUsername || performedBy.toLowerCase().replace(/\s+/g, '_'),
-        bookedByUid: options?.lockedByUid,
+        bookedByUid: options?.lockedByUid || (role === 'admin' ? 'ADM001' : 'EMP001'),
         bookedByRole: role,
         date: dateFormatted,
         bookedAt: nowStr,
