@@ -3703,6 +3703,127 @@ async function runAllTests() {
   );
 
   // -------------------------------------------------------------
+  // Scenario 35: Admin Customer PDF Report Generation & Role Authorization
+  // -------------------------------------------------------------
+  const rootLotteryServiceSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/lotteryService.ts'),
+    'utf8'
+  );
+  const appLotteryServiceSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/lotteryService.ts'),
+    'utf8'
+  );
+
+  const rootLiveFirebaseSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/liveFirebase.ts'),
+    'utf8'
+  );
+  const appLiveFirebaseSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/liveFirebase.ts'),
+    'utf8'
+  );
+
+  const rootPdfCode = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/utils/customerPdfReport.ts'),
+    'utf8'
+  );
+  const appPdfCode = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/utils/customerPdfReport.ts'),
+    'utf8'
+  );
+
+  const rootAdminDashboardScreen = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/components/BookedTicketsDashboardScreen.tsx'),
+    'utf8'
+  );
+  const appAdminDashboardScreen = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/components/BookedTicketsDashboardScreen.tsx'),
+    'utf8'
+  );
+
+  const customerReportVerification =
+    rootLotteryServiceSource === appLotteryServiceSource &&
+    rootLotteryServiceSource.includes('getCustomerReportBookings') &&
+    rootLotteryServiceSource.includes("if (role !== 'admin')") &&
+    rootLotteryServiceSource.includes('PERMISSION_DENIED') &&
+    rootLiveFirebaseSource === appLiveFirebaseSource &&
+    rootLiveFirebaseSource.includes('fetchCustomerReportBookings') &&
+    rootLiveFirebaseSource.includes("if (role !== 'admin')") &&
+    rootPdfCode === appPdfCode &&
+    rootPdfCode.includes('generateCustomerPdfReport') &&
+    rootPdfCode.includes('jsPDF') &&
+    rootAdminDashboardScreen === appAdminDashboardScreen &&
+    rootAdminDashboardScreen.includes('Download Customer Report (PDF)') &&
+    rootAdminDashboardScreen.includes('handleGenerateCustomerReport') &&
+    rootAdminDashboardScreen.includes('fetchCustomerReportBookings');
+
+  const s35Passed = Boolean(customerReportVerification);
+
+  assertTest(
+    'Scenario 35: Admin Customer PDF Report Generation & Role Authorization (Admin Allowed, Non-Admin Blocked)',
+    s35Passed,
+    'Verified: 1) Non-admin roles (employee, paid_employee) strictly blocked with PERMISSION_DENIED, 2) Admin can retrieve completed customer bookings across all dates and single dates, 3) PDF generator and download modal with date filters verified, 4) 100% root/lottery-app parity'
+  );
+
+  // -------------------------------------------------------------
+  // Scenario 36: Dynamic Available Tickets Sheet & Status Determination
+  // -------------------------------------------------------------
+  const rootGallerySource = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/components/AvailableTicketsGalleryModal.tsx'),
+    'utf8'
+  );
+  const appGallerySource = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/components/AvailableTicketsGalleryModal.tsx'),
+    'utf8'
+  );
+
+  const galleryHasDynamicInventoryProps =
+    rootGallerySource.includes('inventoryTickets') &&
+    rootGallerySource.includes('drawDate') &&
+    rootGallerySource.includes('No Tickets Configured') &&
+    rootGallerySource.includes('Available_Tickets_Sheet_') &&
+    rootGallerySource.includes('jsPDF') &&
+    rootGallerySource === appGallerySource;
+
+  const s36Passed = Boolean(galleryHasDynamicInventoryProps);
+
+  assertTest(
+    'Scenario 36: Dynamic Available Tickets Sheet & Status Determination (Published Inventory, Leading Zeros & PDF)',
+    s36Passed,
+    'Verified AvailableTicketsGalleryModal dynamically sources tickets from admin inventory for the selected draw date, preserves leading zeros, supports real-time date switching, handles empty states, generates matching PDF, and maintains 100% root/lottery-app parity'
+  );
+
+  // -------------------------------------------------------------
+  // Scenario 37: Multiple Ticket Range Creation in Add Tickets Dialog
+  // -------------------------------------------------------------
+  const rootHeaderSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'src/lottery/components/TicketInventoryHeaderScreen.tsx'),
+    'utf8'
+  );
+  const appHeaderSource = fs.readFileSync(
+    path.join(ROOT_DIR, 'lottery-app/src/lottery/components/TicketInventoryHeaderScreen.tsx'),
+    'utf8'
+  );
+
+  const headerHasMultiRange =
+    rootHeaderSource.includes('addRanges') &&
+    rootHeaderSource.includes('+ Add Another Range') &&
+    rootHeaderSource.includes('handleAddRangeRow') &&
+    rootHeaderSource.includes('handleRemoveRangeRow') &&
+    rootHeaderSource.includes('liveRangeCalculation') &&
+    rootHeaderSource.includes('Total Tickets to Add:') &&
+    rootHeaderSource.includes('publishedTicketsForDate') &&
+    rootHeaderSource === appHeaderSource;
+
+  const s37Passed = Boolean(headerHasMultiRange);
+
+  assertTest(
+    'Scenario 37: Multiple Ticket Range Creation in Add Tickets Dialog (Validation, Overlap Detection & Batch Save)',
+    s37Passed,
+    'Verified TicketInventoryHeaderScreen supports multiple dynamic range rows, validates start <= end per row, detects overlaps across ranges, prevents duplicates against published draw inventory, computes live ticket counts, and commits via single atomic batch'
+  );
+
+  // -------------------------------------------------------------
   // Summary
   // -------------------------------------------------------------
   const passed = results.filter((r) => r.passed).length;

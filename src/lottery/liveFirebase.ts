@@ -1213,6 +1213,56 @@ class LiveFirebaseService {
   }
 
   /**
+   * Admin-Only: Retrieve all completed customer bookings from Firestore for customer reports.
+   * Scoped strictly to Admin role.
+   */
+  public async fetchCustomerReportBookings(
+    role: LoginType | undefined,
+    filter: { mode: 'all' } | { mode: 'specific'; date: string } | { mode: 'range'; startDate: string; endDate: string }
+  ): Promise<TicketBooking[]> {
+    if (role !== 'admin') {
+      throw new Error('PERMISSION_DENIED: Only administrators can access customer reports.');
+    }
+    const { db } = initFirebase();
+    if (!db) {
+      return lotteryService.getCustomerReportBookings(filter, role);
+    }
+
+    try {
+      const bookingsRef = collection(db, 'bookings');
+      let snap;
+      if (filter.mode === 'specific' && filter.date) {
+        const q = query(bookingsRef, where('date', '==', filter.date));
+        snap = await getDocs(q);
+      } else {
+        // Admin has full read permission to /bookings
+        snap = await getDocs(bookingsRef);
+      }
+
+      let firestoreBookings = snap.docs
+        .map((docSnap) => this.normalizeFirestoreBooking({ id: docSnap.id, ...(docSnap.data() as any) }))
+        .filter((b) => (b.bookingStatus === 'Booked' || b.paymentStatus === 'Paid') && b.bookingStatus !== 'Cancelled');
+
+      if (filter.mode === 'range') {
+        if (filter.startDate) {
+          firestoreBookings = firestoreBookings.filter((b) => (b.date || '') >= filter.startDate);
+        }
+        if (filter.endDate) {
+          firestoreBookings = firestoreBookings.filter((b) => (b.date || '') <= filter.endDate);
+        }
+      }
+
+      if (firestoreBookings.length > 0) {
+        return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
+      }
+      return lotteryService.getCustomerReportBookings(filter, role);
+    } catch (err) {
+      console.error('[Firestore] fetchCustomerReportBookings error:', err);
+      return lotteryService.getCustomerReportBookings(filter, role);
+    }
+  }
+
+  /**
    * Live real-time subscription to draw bookings in Firestore + cross-tab sync
    */
   public subscribeBookingsFirestore(

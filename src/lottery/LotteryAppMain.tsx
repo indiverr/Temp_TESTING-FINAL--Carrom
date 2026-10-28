@@ -1630,6 +1630,10 @@ export const LotteryAppMain: React.FC = () => {
         onClose={() => setIsGalleryOpen(false)}
         bookedTickets={allBookings}
         activeLocks={activeLocks}
+        inventoryTickets={inventoryTickets}
+        drawDate={config.businessDate}
+        seriesTitle={config.seriesTitle}
+        appearance={gridAppearance}
       />
     </div>
   );

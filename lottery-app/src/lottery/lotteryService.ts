@@ -686,6 +686,33 @@ class LotteryDatabaseService {
     return this.getBookings(date).filter((b) => b.paymentStatus === 'Paid');
   }
 
+  /**
+   * Admin-Only: Retrieve completed customer bookings for generating customer reports.
+   * Supports filtering by all dates, specific draw date, or date range.
+   */
+  public getCustomerReportBookings(
+    filter: { mode: 'all' } | { mode: 'specific'; date: string } | { mode: 'range'; startDate: string; endDate: string },
+    role?: LoginType
+  ): TicketBooking[] {
+    if (role !== 'admin') {
+      throw new Error('PERMISSION_DENIED: Only administrators can access customer reports.');
+    }
+    let list = this.inMemoryBookings.filter(
+      (b) => b.bookingStatus === 'Booked' || b.paymentStatus === 'Paid'
+    );
+    if (filter.mode === 'specific' && filter.date) {
+      list = list.filter((b) => b.date === filter.date);
+    } else if (filter.mode === 'range') {
+      if (filter.startDate) {
+        list = list.filter((b) => (b.date || '') >= filter.startDate);
+      }
+      if (filter.endDate) {
+        list = list.filter((b) => (b.date || '') <= filter.endDate);
+      }
+    }
+    return this.ensureLegacyCustomerIds(list);
+  }
+
   public isTicketBooked(ticketNumber: string, date: string): boolean {
     const norm = this.normalizeTicketNum(ticketNumber);
     return this.inMemoryBookings.some(

@@ -416,8 +416,13 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
     if (!todayDayPresetConfig || !todayDayPresetConfig.enabled) return;
     setAddMode(todayDayPresetConfig.mode);
     if (todayDayPresetConfig.mode === 'range') {
-      setAddRangeStart(todayDayPresetConfig.rangeStart || '0000');
-      setAddRangeEnd(todayDayPresetConfig.rangeEnd || '0099');
+      setAddRanges([
+        {
+          id: '1',
+          start: todayDayPresetConfig.rangeStart || '0000',
+          end: todayDayPresetConfig.rangeEnd || '0099',
+        },
+      ]);
     } else if (todayDayPresetConfig.mode === 'list') {
       setAddCommaList(todayDayPresetConfig.ticketList || '');
     } else if (todayDayPresetConfig.mode === 'single') {
@@ -425,17 +430,123 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
     }
   };
 
+  interface TicketRangeRow {
+    id: string;
+    start: string;
+    end: string;
+  }
+
   const [addMode, setAddMode] = useState<'single' | 'list' | 'range'>('range');
   const [addSingleNumber, setAddSingleNumber] = useState('');
   const [addCommaList, setAddCommaList] = useState('');
-  const [addRangeStart, setAddRangeStart] = useState('0001');
-  const [addRangeEnd, setAddRangeEnd] = useState('0025');
+  const [addRanges, setAddRanges] = useState<TicketRangeRow[]>([
+    { id: '1', start: '0001', end: '0025' },
+  ]);
+  const [addSuccessMessage, setAddSuccessMessage] = useState<string | null>(null);
   const [addPublishImmediately, setAddPublishImmediately] = useState(true);
   const [addError, setAddError] = useState<string | null>(null);
   const [isAddingTickets, setIsAddingTickets] = useState(false);
   const [editAppearance, setEditAppearance] = useState<GridAppearanceConfig>(appearance);
 
+  const handleAddRangeRow = () => {
+    const nextId = String(Date.now() + Math.random());
+    const lastRow = addRanges[addRanges.length - 1];
+    let nextStart = '0026';
+    let nextEnd = '0050';
+    if (lastRow) {
+      const lastEndVal = parseInt(lastRow.end, 10);
+      if (!isNaN(lastEndVal)) {
+        const width = lastRow.end.length || 4;
+        nextStart = String(lastEndVal + 1).padStart(width, '0');
+        nextEnd = String(lastEndVal + 50).padStart(width, '0');
+      }
+    }
+    setAddRanges((prev) => [...prev, { id: nextId, start: nextStart, end: nextEnd }]);
+  };
+
+  const handleRemoveRangeRow = (id: string) => {
+    if (addRanges.length <= 1) return;
+    setAddRanges((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleUpdateRangeRow = (id: string, field: 'start' | 'end', value: string) => {
+    setAddRanges((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
+    );
+  };
+
   const allInventory = inventoryTickets && inventoryTickets.length > 0 ? inventoryTickets : internalInventory;
+
+  const publishedTicketsForDate = React.useMemo(() => {
+    return new Set(
+      allInventory
+        .filter((t) => t.drawDate === config.businessDate && t.status === 'PUBLISHED')
+        .map((t) => t.ticketNumber)
+    );
+  }, [allInventory, config.businessDate]);
+
+  const liveRangeCalculation = React.useMemo(() => {
+    let totalTickets = 0;
+    const errors: { [id: string]: string } = {};
+    const numbersSet = new Set<string>();
+    let hasOverlap = false;
+    let overlapMessage = '';
+
+    for (let idx = 0; idx < addRanges.length; idx++) {
+      const row = addRanges[idx];
+      const sStr = row.start.trim();
+      const eStr = row.end.trim();
+
+      if (!sStr && !eStr) {
+        errors[row.id] = 'Start and End numbers required.';
+        continue;
+      }
+
+      if (!/^\d+$/.test(sStr) || !/^\d+$/.test(eStr)) {
+        errors[row.id] = 'Start and End must be positive numbers.';
+        continue;
+      }
+
+      const s = parseInt(sStr, 10);
+      const e = parseInt(eStr, 10);
+
+      if (s > e) {
+        errors[row.id] = `Start (${s}) must be ≤ End (${e}).`;
+        continue;
+      }
+
+      const count = e - s + 1;
+      if (count > 500) {
+        errors[row.id] = `Range exceeds 500 tickets limit (${count}).`;
+        continue;
+      }
+
+      const padLen = Math.max(sStr.length, eStr.length, 4);
+
+      for (let num = s; num <= e; num++) {
+        const ticketNum = String(num).padStart(padLen, '0');
+        if (numbersSet.has(ticketNum)) {
+          hasOverlap = true;
+          overlapMessage = `Ticket #${ticketNum} overlaps across multiple range rows.`;
+          errors[row.id] = `Overlaps on ticket #${ticketNum}.`;
+          break;
+        }
+        numbersSet.add(ticketNum);
+      }
+
+      if (!errors[row.id]) {
+        totalTickets += count;
+      }
+    }
+
+    return {
+      totalTickets,
+      errors,
+      hasOverlap,
+      overlapMessage,
+      generatedNumbers: Array.from(numbersSet),
+    };
+  }, [addRanges]);
 
   const confirmedSet = React.useMemo(() => {
     const set = new Set<string>();
@@ -478,11 +589,17 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
 
   const handleExecuteAddTickets = async () => {
     setAddError(null);
+    setAddSuccessMessage(null);
     let ticketsToAdd: string[] = [];
+
     if (addMode === 'single') {
       const norm = addSingleNumber.trim().padStart(4, '0');
       if (!/^\d{4}$/.test(norm)) {
         setAddError('Please enter a valid 4-digit ticket number (e.g. 0015).');
+        return;
+      }
+      if (publishedTicketsForDate.has(norm)) {
+        setAddError(`Ticket #${norm} is already published for draw date ${config.businessDate}.`);
         return;
       }
       ticketsToAdd = [norm];
@@ -492,22 +609,56 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
         setAddError('Please enter valid comma-separated 4-digit ticket numbers.');
         return;
       }
-      ticketsToAdd = Array.from(new Set(parts));
-    } else if (addMode === 'range') {
-      const s = parseInt(addRangeStart, 10);
-      const e = parseInt(addRangeEnd, 10);
-      if (isNaN(s) || isNaN(e) || s < 0 || e < s || (e - s) > 500) {
-        setAddError('Please enter a valid range (start <= end, max 500 tickets).');
+      const uniqueParts = Array.from(new Set(parts));
+      const duplicateWithPublished = uniqueParts.filter((n) => publishedTicketsForDate.has(n));
+      if (duplicateWithPublished.length > 0) {
+        setAddError(`Ticket(s) ${duplicateWithPublished.slice(0, 5).join(', ')} already published for ${config.businessDate}.`);
         return;
       }
-      for (let i = s; i <= e; i++) {
-        ticketsToAdd.push(String(i).padStart(4, '0'));
+      ticketsToAdd = uniqueParts;
+    } else if (addMode === 'range') {
+      if (addRanges.length === 0) {
+        setAddError('Please add at least one ticket range.');
+        return;
       }
+
+      // Check per-row errors
+      for (let idx = 0; idx < addRanges.length; idx++) {
+        const row = addRanges[idx];
+        const rowErr = liveRangeCalculation.errors[row.id];
+        if (rowErr) {
+          setAddError(`Row ${idx + 1}: ${rowErr}`);
+          return;
+        }
+      }
+
+      if (liveRangeCalculation.hasOverlap) {
+        setAddError(liveRangeCalculation.overlapMessage || 'Overlapping ticket ranges detected.');
+        return;
+      }
+
+      if (liveRangeCalculation.generatedNumbers.length === 0) {
+        setAddError('Please enter valid ticket ranges.');
+        return;
+      }
+
+      // Check duplicates against already published inventory
+      const duplicateWithPublished = liveRangeCalculation.generatedNumbers.filter((n) =>
+        publishedTicketsForDate.has(n)
+      );
+      if (duplicateWithPublished.length > 0) {
+        const preview = duplicateWithPublished.slice(0, 5).join(', ');
+        const extra = duplicateWithPublished.length > 5 ? ` and ${duplicateWithPublished.length - 5} more` : '';
+        setAddError(`Cannot add duplicate ticket(s): ${preview}${extra} already published for ${config.businessDate}.`);
+        return;
+      }
+
+      ticketsToAdd = liveRangeCalculation.generatedNumbers;
     }
 
     const alreadyBooked = ticketsToAdd.filter((n) => isTicketBooked(n));
     if (alreadyBooked.length > 0) {
-      setAddError(`Cannot add ticket(s) ${alreadyBooked.join(', ')} because they are already confirmed/booked.`);
+      setAddError(`Cannot add ticket(s) ${alreadyBooked.slice(0, 5).join(', ')} because they are already confirmed/booked.`);
       return;
     }
 
@@ -537,9 +688,16 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
         );
       }
       setInternalInventory(lotteryService.getInventory(config.businessDate, undefined, currentRole));
-      setIsAddTicketsModalOpen(false);
+      setAddSuccessMessage(`Successfully added ${ticketsToAdd.length} ticket(s) across ${addMode === 'range' ? addRanges.length + ' range(s)' : 'operation'}!`);
+      setTimeout(() => {
+        setIsAddTicketsModalOpen(false);
+        setAddSuccessMessage(null);
+      }, 1500);
       setAddSingleNumber('');
       setAddCommaList('');
+      setAddRanges([{ id: '1', start: '0001', end: '0025' }]);
+    } catch (err: any) {
+      setAddError(err?.message || 'Error adding tickets');
     } finally {
       setIsAddingTickets(false);
     }
@@ -1338,6 +1496,13 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
             )}
 
+            {addSuccessMessage && (
+              <div className="mb-3 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center space-x-1.5">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{addSuccessMessage}</span>
+              </div>
+            )}
+
             <div className="space-y-4 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Draw Date & Series</label>
@@ -1392,26 +1557,79 @@ export const TicketInventoryHeaderScreen: React.FC<TicketInventoryHeaderProps> =
               </div>
 
               {addMode === 'range' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-600 mb-1 font-medium">Start Number</label>
-                    <input
-                      type="text"
-                      value={addRangeStart}
-                      onChange={(e) => setAddRangeStart(e.target.value)}
-                      placeholder="0001"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono font-bold"
-                    />
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-700">Ticket Ranges:</label>
+                    <button
+                      type="button"
+                      onClick={handleAddRangeRow}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center space-x-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add Another Range</span>
+                    </button>
                   </div>
-                  <div>
-                    <label className="block text-slate-600 mb-1 font-medium">End Number</label>
-                    <input
-                      type="text"
-                      value={addRangeEnd}
-                      onChange={(e) => setAddRangeEnd(e.target.value)}
-                      placeholder="0050"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg font-mono font-bold"
-                    />
+
+                  <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                    {addRanges.map((row, idx) => {
+                      const rowError = liveRangeCalculation.errors[row.id];
+                      return (
+                        <div
+                          key={row.id}
+                          className={`p-2.5 rounded-xl border transition-colors ${
+                            rowError ? 'bg-rose-50/60 border-rose-300' : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[11px] font-bold text-slate-400 w-5 text-center">
+                              #{idx + 1}
+                            </span>
+                            <div className="flex-1">
+                              <input
+                                type="text"
+                                value={row.start}
+                                onChange={(e) => handleUpdateRangeRow(row.id, 'start', e.target.value)}
+                                placeholder="0001"
+                                className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-bold text-xs"
+                              />
+                            </div>
+                            <span className="text-xs font-semibold text-slate-400">to</span>
+                            <div className="flex-1">
+                              <input
+                                type="text"
+                                value={row.end}
+                                onChange={(e) => handleUpdateRangeRow(row.id, 'end', e.target.value)}
+                                placeholder="0050"
+                                className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-bold text-xs"
+                              />
+                            </div>
+                            {addRanges.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRangeRow(row.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Remove range row"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                          {rowError && (
+                            <div className="text-[10px] text-rose-600 font-medium mt-1 pl-7">
+                              {rowError}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Range Summary Box */}
+                  <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl flex items-center justify-between text-xs">
+                    <span className="font-semibold text-blue-900">Total Tickets to Add:</span>
+                    <span className="font-mono font-bold text-sm text-blue-700">
+                      {liveRangeCalculation.totalTickets} tickets
+                    </span>
                   </div>
                 </div>
               )}
