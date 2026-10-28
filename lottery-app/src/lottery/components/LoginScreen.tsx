@@ -417,6 +417,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </p>
         </div>
 
+        {/* Startup Safe Check Alert Banner if unconfigured in live mode */}
+        {!getFirebaseConfigDiagnostics().configured && (
+          <div className="mb-5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 text-xs">
+            <div className="flex items-start space-x-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Live Authentication Offline</p>
+                <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                  {getFirebaseConfigDiagnostics().diagnosticMessage}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Login / Sign Up Mode Switcher (beside Login option) */}
         {step !== 'otp' && (
           <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-lg border border-slate-200 mb-5">

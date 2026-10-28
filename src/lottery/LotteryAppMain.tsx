@@ -14,7 +14,7 @@ import { PaymentQueueScreen } from './components/PaymentQueueScreen';
 
 import { lotteryService } from './lotteryService';
 import { liveFirebase } from './liveFirebase';
-import { isFirebaseConfigured } from './firebaseConfig';
+import { isFirebaseConfigured, getFirebaseConfigDiagnostics, isEmulatorMode } from './firebaseConfig';
 import {
   LoginType,
   formatRoleLabel,
@@ -40,6 +40,8 @@ import {
   Shield,
   Download,
   CheckCircle,
+  AlertCircle,
+  AlertTriangle,
   Database,
   Cloud,
 } from 'lucide-react';
@@ -1254,20 +1256,34 @@ export const LotteryAppMain: React.FC = () => {
               className={`text-[10px] uppercase font-bold px-2 py-1 rounded border flex items-center space-x-1 ${
                 isLiveFirebaseMode
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : isEmulatorMode()
+                  ? 'bg-blue-50 text-blue-700 border-blue-200'
                   : 'bg-amber-50 text-amber-800 border-amber-200'
               }`}
               title={
                 isLiveFirebaseMode
                   ? 'Connected to Firebase Firestore & Cloud Functions backend'
-                  : 'Operating in client-side simulated demonstration mode'
+                  : isEmulatorMode()
+                  ? 'Operating in local Firebase Emulator mode'
+                  : getFirebaseConfigDiagnostics().diagnosticMessage || 'Operating in client-side simulated demonstration mode'
               }
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  isLiveFirebaseMode ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  isLiveFirebaseMode
+                    ? 'bg-emerald-500 animate-pulse'
+                    : isEmulatorMode()
+                    ? 'bg-blue-500'
+                    : 'bg-amber-500'
                 }`}
               />
-              <span>{isLiveFirebaseMode ? 'Firebase Live' : 'Demo Mode'}</span>
+              <span>
+                {isLiveFirebaseMode
+                  ? 'Firebase Live'
+                  : isEmulatorMode()
+                  ? 'Emulator Mode'
+                  : 'Demo (Unconfigured)'}
+              </span>
             </span>
 
             <div className="hidden lg:flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
@@ -1279,6 +1295,25 @@ export const LotteryAppMain: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Startup Safe Check Alert Banner if unconfigured in live mode */}
+      {!isLiveFirebaseMode && !isEmulatorMode() && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 text-amber-900 px-4 py-2.5 text-xs font-medium flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <div>
+              <span className="font-bold">Production Configuration Incomplete: </span>
+              <span>
+                {getFirebaseConfigDiagnostics().diagnosticMessage ||
+                  'Firebase credentials for project "carrom-df56a" are missing. Live authentication is disabled.'}
+              </span>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+            Auth Offline
+          </span>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toastMessage && (

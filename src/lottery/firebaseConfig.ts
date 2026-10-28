@@ -53,6 +53,8 @@ const DEFAULT_AUTH_DOMAIN = 'carrom-df56a.firebaseapp.com';
 const DEFAULT_STORAGE_BUCKET = 'carrom-df56a.firebasestorage.app';
 const DEFAULT_MESSAGING_SENDER_ID = '1036558671064';
 const DEFAULT_APP_ID = '1:1036558671064:web:2f0b406418fd960cc94bad';
+const DEFAULT_API_KEY = 'AIzaSyAuSpSiU06egH0T947Dnb_-cahcrxmWn3w';
+const DEFAULT_MEASUREMENT_ID = 'G-594JX91FJ0';
 
 const cleanEnvVal = (val: unknown): string => {
   if (typeof val !== 'string') return '';
@@ -116,7 +118,7 @@ export const getFirebaseEnvConfig = (): FirebaseClientConfig => {
     cleanEnvVal(localSaved.appId);
 
   return {
-    apiKey: envApiKey || (isEmulator ? 'fake-emulator-api-key' : ''),
+    apiKey: envApiKey || (isEmulator ? 'fake-emulator-api-key' : DEFAULT_API_KEY),
     authDomain:
       envAuthDomain ||
       (isEmulator ? 'demo-carrom-lottery.firebaseapp.com' : DEFAULT_AUTH_DOMAIN),
