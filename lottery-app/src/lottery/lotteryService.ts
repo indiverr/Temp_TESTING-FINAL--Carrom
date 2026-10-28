@@ -17,6 +17,7 @@ import {
   DEFAULT_WEEKLY_PRESETS,
   DAYS_OF_WEEK,
   DayOfWeek,
+  PaymentQueueTask,
 } from './types';
 import { LOTTERY_COLUMNS_SPEC } from './mockData';
 
@@ -33,6 +34,15 @@ const STORAGE_KEYS = {
   INVENTORY: 'carrom_lottery_inventory_v2',
   APPEARANCE: 'carrom_lottery_appearance_v2',
   WEEKLY_PRESETS: 'carrom_lottery_weekly_presets_v1',
+  PAYMENT_QUEUE: 'carrom_lottery_payment_queue_v1',
+  EMPLOYEE_LABELS: 'carrom_lottery_employee_labels_v1',
+};
+
+export const DEFAULT_EMPLOYEE_LABELS: Record<string, { uid: string; label: string; name: string; role: LoginType }> = {
+  ADM001: { uid: 'ADM001', label: 'L1', name: 'Sasikaran', role: 'admin' },
+  EMP001: { uid: 'EMP001', label: 'L2', name: 'Sasikaran', role: 'employee' },
+  EMP002: { uid: 'EMP002', label: 'L3', name: 'Hariharan', role: 'employee' },
+  PEM001: { uid: 'PEM001', label: 'L4', name: 'Gogul', role: 'paid_employee' },
 };
 
 export const TICKET_LOCK_DURATION_MS = 2 * 60 * 1000; // 2 minutes (120 seconds)
@@ -181,6 +191,11 @@ class LotteryDatabaseService {
   private inMemoryAppearance: GridAppearanceConfig = DEFAULT_GRID_APPEARANCE;
   private inMemoryWeeklyPresets: WeeklyTicketPresetsConfig = DEFAULT_WEEKLY_PRESETS;
   private inMemoryIdempotency: Map<string, any> = new Map();
+  private inMemoryPaymentQueue: Map<string, PaymentQueueTask> = new Map();
+  private inMemoryEmployeeLabels: Map<
+    string,
+    { uid: string; label: string; name: string; username?: string; role?: LoginType }
+  > = new Map();
   private lastCustomerSerial: number = CUSTOMER_CODE_BASE;
   private listeners: Set<() => void> = new Set();
   private broadcastChannel: BroadcastChannel | null = null;
@@ -277,6 +292,28 @@ class LotteryDatabaseService {
       if (storedCounter) {
         const num = Number(storedCounter);
         if (num >= CUSTOMER_CODE_BASE) this.lastCustomerSerial = num;
+      }
+      const storedPq = localStorage.getItem(STORAGE_KEYS.PAYMENT_QUEUE);
+      if (storedPq) {
+        try {
+          const parsedPq: PaymentQueueTask[] = JSON.parse(storedPq);
+          this.inMemoryPaymentQueue = new Map(
+            parsedPq.map((t) => [
+              t.id,
+              {
+                ...t,
+                employeeLabel: t.employeeLabel || 'L1',
+              },
+            ])
+          );
+        } catch {}
+      }
+      const storedLabels = localStorage.getItem(STORAGE_KEYS.EMPLOYEE_LABELS);
+      if (storedLabels) {
+        try {
+          const parsedLabels: Record<string, any> = JSON.parse(storedLabels);
+          this.inMemoryEmployeeLabels = new Map(Object.entries(parsedLabels));
+        } catch {}
       }
     } catch {}
   }
@@ -414,6 +451,64 @@ class LotteryDatabaseService {
       } else {
         localStorage.setItem(STORAGE_KEYS.PAPERS, JSON.stringify(INITIAL_PAPERS));
       }
+
+      const storedLabels =
+        typeof window !== 'undefined' && window.localStorage
+          ? localStorage.getItem(STORAGE_KEYS.EMPLOYEE_LABELS)
+          : null;
+      if (storedLabels) {
+        try {
+          const parsed = JSON.parse(storedLabels);
+          this.inMemoryEmployeeLabels = new Map(Object.entries(parsed));
+        } catch {}
+      } else {
+        this.inMemoryEmployeeLabels = new Map(Object.entries(DEFAULT_EMPLOYEE_LABELS));
+        this.saveEmployeeLabels();
+      }
+
+      const storedPq =
+        typeof window !== 'undefined' && window.localStorage
+          ? localStorage.getItem(STORAGE_KEYS.PAYMENT_QUEUE)
+          : null;
+      if (storedPq) {
+        try {
+          const parsedPq: PaymentQueueTask[] = JSON.parse(storedPq);
+          this.inMemoryPaymentQueue = new Map(
+            parsedPq.map((t) => [
+              t.id,
+              {
+                ...t,
+                employeeLabel: t.employeeLabel || 'L1',
+              },
+            ])
+          );
+        } catch {}
+      } else {
+        this.inMemoryPaymentQueue = new Map();
+        for (const b of this.inMemoryBookings) {
+          if (b.paymentStatus !== 'Paid') {
+            const taskId = `pq_${b.id}`;
+            const empUid = b.bookedByUid || (b.bookedByRole === 'admin' ? 'ADM001' : 'EMP001');
+            const empLabel = this.getOrCreateEmployeeLabel(empUid, b.bookedBy, b.bookedByRole);
+            this.inMemoryPaymentQueue.set(taskId, {
+              id: taskId,
+              bookingId: b.id,
+              ticketNumber: b.ticketNumber,
+              drawDate: b.date,
+              amountDue: b.remainingBalance || b.totalAmount,
+              totalAmount: b.totalAmount,
+              amountPaid: b.amountPaid || 0,
+              paymentStatus: b.paymentStatus,
+              status: 'PENDING',
+              actionRequired: 'CONFIRM_PAYMENT',
+              employeeLabel: empLabel,
+              createdAt: b.bookedAt || new Date().toISOString(),
+              updatedAt: b.bookedAt || new Date().toISOString(),
+            });
+          }
+        }
+        this.savePaymentQueue();
+      }
     } catch {
       this.inMemoryBookings = this.ensureLegacyCustomerIds(createInitialSeedBookings());
       this.inMemoryConfig = DEFAULT_CONFIG;
@@ -471,6 +566,77 @@ class LotteryDatabaseService {
     } catch {}
   }
 
+  private savePaymentQueue() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(
+          STORAGE_KEYS.PAYMENT_QUEUE,
+          JSON.stringify(Array.from(this.inMemoryPaymentQueue.values()))
+        );
+      }
+    } catch {}
+  }
+
+  private saveEmployeeLabels() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const obj: Record<string, any> = {};
+        this.inMemoryEmployeeLabels.forEach((v, k) => {
+          obj[k] = v;
+        });
+        localStorage.setItem(STORAGE_KEYS.EMPLOYEE_LABELS, JSON.stringify(obj));
+      }
+    } catch {}
+  }
+
+  /**
+   * Resolves or creates a persistent, deterministic employee label (L1, L2, L3, ...)
+   * mapped to employee UID. The same employee UID always receives the exact same label.
+   */
+  public getOrCreateEmployeeLabel(uid: string, name?: string, role?: LoginType, username?: string): string {
+    if (!uid) return 'L1';
+    const existing = this.inMemoryEmployeeLabels.get(uid);
+    if (existing && existing.label) {
+      return existing.label;
+    }
+
+    let maxIdx = 0;
+    this.inMemoryEmployeeLabels.forEach((item) => {
+      const match = item.label.match(/^L(\d+)$/);
+      if (match) {
+        const val = parseInt(match[1], 10);
+        if (val > maxIdx) maxIdx = val;
+      }
+    });
+
+    const newLabel = `L${maxIdx + 1}`;
+    const record = {
+      uid,
+      label: newLabel,
+      name: name || 'Employee',
+      username: username || '',
+      role: role || 'employee',
+    };
+    this.inMemoryEmployeeLabels.set(uid, record);
+    this.saveEmployeeLabels();
+    return newLabel;
+  }
+
+  /**
+   * Admin-Only: Returns mapping of label -> real employee name (e.g. { 'L1': 'Sasikaran', 'L2': 'Hariharan' }).
+   * Strictly blocked for paid employees and regular employees (returns empty object).
+   */
+  public getEmployeeLabelMap(callerRole: LoginType): Record<string, string> {
+    if (callerRole !== 'admin') {
+      return {};
+    }
+    const map: Record<string, string> = {};
+    this.inMemoryEmployeeLabels.forEach((item) => {
+      map[item.label] = item.name;
+    });
+    return map;
+  }
+
   private normalizeTicketNum(num: string): string {
     return String(num || '').trim().padStart(4, '0');
   }
@@ -497,6 +663,10 @@ class LotteryDatabaseService {
 
   // Bookings list
   public getBookings(date?: string, role?: LoginType, operatorUid?: string): TicketBooking[] {
+    // Requirement 3: Paid employees must not read or enumerate /bookings
+    if (role === 'paid_employee') {
+      return [];
+    }
     let list = date
       ? this.inMemoryBookings.filter((b) => b.date === date)
       : this.inMemoryBookings;
@@ -1093,6 +1263,9 @@ class LotteryDatabaseService {
         notes: `Created booking (${customerRecord.customerId}) for ${customerName}`,
       };
 
+      const bookedUid = options?.lockedByUid || (role === 'admin' ? 'ADM001' : 'EMP001');
+      const empLabel = this.getOrCreateEmployeeLabel(bookedUid, performedBy, role);
+
       return {
         id: `b-${now}-${item.ticketNumber}`,
         ticketNumber: item.ticketNumber,
@@ -1112,8 +1285,9 @@ class LotteryDatabaseService {
         paymentStatus: 'Unpaid',
         bookedBy: performedBy,
         bookedByUsername: options?.bookedByUsername || performedBy.toLowerCase().replace(/\s+/g, '_'),
-        bookedByUid: options?.lockedByUid || (role === 'admin' ? 'ADM001' : 'EMP001'),
+        bookedByUid: bookedUid,
         bookedByRole: role,
+        employeeLabel: empLabel,
         date: dateFormatted,
         bookedAt: nowStr,
         history: [audit],
@@ -1125,7 +1299,29 @@ class LotteryDatabaseService {
     for (const num of ticketNumbers) {
       this.inMemoryLocks.delete(this.getLockKey(dateFormatted, num));
     }
+    // Generate restricted payment queue task for pending/unpaid bookings (Requirement 4 & 5)
+    for (const b of newBookings) {
+      if (b.paymentStatus !== 'Paid') {
+        const taskId = `pq_${b.id}`;
+        this.inMemoryPaymentQueue.set(taskId, {
+          id: taskId,
+          bookingId: b.id,
+          ticketNumber: b.ticketNumber,
+          drawDate: b.date,
+          amountDue: b.remainingBalance,
+          totalAmount: b.totalAmount,
+          amountPaid: b.amountPaid,
+          paymentStatus: b.paymentStatus,
+          status: 'PENDING',
+          actionRequired: 'CONFIRM_PAYMENT',
+          employeeLabel: b.employeeLabel || 'L1',
+          createdAt: b.bookedAt,
+          updatedAt: b.bookedAt,
+        });
+      }
+    }
     this.saveBookings();
+    this.savePaymentQueue();
     this.saveLocks();
     this.broadcastUpdate();
 
@@ -1142,6 +1338,141 @@ class LotteryDatabaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Restricted Payment Queue queries (Requirement 4 & 5)
+   * Only returns minimal payment verification fields; never exposes customer PII or full booking docs.
+   */
+  public getPaymentQueue(
+    date?: string,
+    statusFilter?: 'ALL' | 'PENDING' | 'COMPLETED',
+    callerRole?: LoginType
+  ): PaymentQueueTask[] {
+    if (callerRole === 'employee') {
+      return [];
+    }
+    const d = date || this.inMemoryConfig.businessDate;
+    let list = Array.from(this.inMemoryPaymentQueue.values()).filter((t) => t.drawDate === d);
+    if (statusFilter && statusFilter !== 'ALL') {
+      list = list.filter((t) => t.status === statusFilter);
+    }
+    return list
+      .map((t) => ({
+        id: t.id,
+        bookingId: t.bookingId,
+        ticketNumber: t.ticketNumber,
+        drawDate: t.drawDate,
+        amountDue: t.amountDue,
+        totalAmount: t.totalAmount,
+        amountPaid: t.amountPaid,
+        paymentStatus: t.paymentStatus,
+        status: t.status,
+        actionRequired: t.actionRequired,
+        employeeLabel: t.employeeLabel || 'L1',
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        completedAt: t.completedAt,
+        completedBy: t.completedBy,
+        completedByUid: t.completedByUid,
+      }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * Server-validated, idempotent payment task completion (Requirement 6)
+   */
+  public completePaymentTask(
+    taskId: string,
+    bookingId: string,
+    amountPaid?: number,
+    paymentMethod: string = 'Cash',
+    paymentRef: string = '',
+    operator?: { id: string; name: string; role: LoginType },
+    options?: { idempotencyKey?: string }
+  ): { success: boolean; taskId: string; remainingBalance: number; status: string; error?: string } {
+    if (operator && operator.role !== 'admin' && operator.role !== 'paid_employee') {
+      return {
+        success: false,
+        taskId,
+        remainingBalance: 0,
+        status: 'FAILED',
+        error: 'Unauthorized: Only Paid Employees or Admin can complete payment tasks.',
+      };
+    }
+
+    if (options?.idempotencyKey && this.inMemoryIdempotency.has(options.idempotencyKey)) {
+      return this.inMemoryIdempotency.get(options.idempotencyKey);
+    }
+
+    const task = this.inMemoryPaymentQueue.get(taskId);
+    if (!task) {
+      return { success: false, taskId, remainingBalance: 0, status: 'FAILED', error: 'Payment task not found.' };
+    }
+
+    if (task.status === 'COMPLETED') {
+      return { success: true, taskId, remainingBalance: 0, status: 'COMPLETED' };
+    }
+
+    const bookingIndex = this.inMemoryBookings.findIndex((b) => b.id === bookingId);
+    if (bookingIndex === -1) {
+      return { success: false, taskId, remainingBalance: 0, status: 'FAILED', error: 'Associated booking record not found.' };
+    }
+
+    const booking = this.inMemoryBookings[bookingIndex];
+    const amt = amountPaid ?? task.amountDue;
+    if (amt <= 0 || amt > booking.remainingBalance) {
+      return { success: false, taskId, remainingBalance: booking.remainingBalance, status: 'FAILED', error: 'Invalid payment amount.' };
+    }
+
+    const newRemaining = Math.max(0, booking.remainingBalance - amt);
+    const newPaid = (booking.amountPaid || 0) + amt;
+    const paymentStatus = newRemaining === 0 ? 'Paid' : 'Partial';
+    const taskStatus = newRemaining === 0 ? 'COMPLETED' : 'PENDING';
+    const nowIso = new Date().toISOString();
+    const opName = operator?.name || 'Paid Employee';
+    const opUid = operator?.id || 'PEM001';
+
+    // Update booking
+    booking.amountPaid = newPaid;
+    booking.remainingBalance = newRemaining;
+    booking.paymentStatus = paymentStatus;
+    booking.paidAt = nowIso;
+    booking.paidBy = opName;
+    if (!booking.history) booking.history = [];
+    booking.history.unshift({
+      id: `aud-pay-${Date.now()}`,
+      timestamp: nowIso,
+      action: newRemaining === 0 ? 'PAYMENT_RECEIVED' : 'PARTIAL_PAYMENT',
+      amountChanged: amt,
+      paymentMethod,
+      paymentRef: paymentRef || `REC-${Date.now()}`,
+      performedBy: opName,
+      performedByRole: operator?.role || 'paid_employee',
+      notes: `Payment completed via restricted queue by ${opName}`,
+    });
+
+    // Update task
+    task.amountPaid = newPaid;
+    task.amountDue = newRemaining;
+    task.paymentStatus = paymentStatus;
+    task.status = taskStatus;
+    task.updatedAt = nowIso;
+    if (taskStatus === 'COMPLETED') {
+      task.completedAt = nowIso;
+      task.completedBy = opName;
+      task.completedByUid = opUid;
+    }
+
+    this.saveBookings();
+    this.savePaymentQueue();
+    this.broadcastUpdate();
+
+    const response = { success: true, taskId, remainingBalance: newRemaining, status: taskStatus };
+    if (options?.idempotencyKey) {
+      this.inMemoryIdempotency.set(options.idempotencyKey, response);
+    }
+    return response;
   }
 
   /**
@@ -1340,6 +1671,10 @@ class LotteryDatabaseService {
 
 
   public getInventory(drawDate?: string, seriesId?: string, role?: LoginType): TicketInventoryItem[] {
+    // Requirement 3: Paid employees must not read or enumerate /ticketInventory
+    if (role === 'paid_employee') {
+      return [];
+    }
     const d = drawDate || this.inMemoryConfig.businessDate;
     const items = Array.from(this.inMemoryInventory.values()).filter((inv) => {
       if (inv.drawDate !== d) return false;
@@ -1641,12 +1976,38 @@ class LotteryDatabaseService {
     this.inMemoryCustomers.clear();
     this.inMemoryLocks.clear();
     this.inMemoryIdempotency.clear();
+    this.inMemoryEmployeeLabels = new Map(Object.entries(DEFAULT_EMPLOYEE_LABELS));
+    this.saveEmployeeLabels();
     this.lastCustomerSerial = CUSTOMER_CODE_BASE;
     const seed = this.ensureLegacyCustomerIds(createInitialSeedBookings());
     this.inMemoryBookings = seed;
     this.inMemoryConfig = DEFAULT_CONFIG;
     this.inMemoryWinners = INITIAL_WINNERS;
     this.inMemoryPapers = INITIAL_PAPERS;
+    this.inMemoryPaymentQueue.clear();
+    for (const b of this.inMemoryBookings) {
+      if (b.paymentStatus !== 'Paid') {
+        const taskId = `pq_${b.id}`;
+        const empUid = b.bookedByUid || (b.bookedByRole === 'admin' ? 'ADM001' : 'EMP001');
+        const empLabel = this.getOrCreateEmployeeLabel(empUid, b.bookedBy, b.bookedByRole);
+        this.inMemoryPaymentQueue.set(taskId, {
+          id: taskId,
+          bookingId: b.id,
+          ticketNumber: b.ticketNumber,
+          drawDate: b.date,
+          amountDue: b.remainingBalance || b.totalAmount,
+          totalAmount: b.totalAmount,
+          amountPaid: b.amountPaid || 0,
+          paymentStatus: b.paymentStatus,
+          status: 'PENDING',
+          actionRequired: 'CONFIRM_PAYMENT',
+          employeeLabel: empLabel,
+          createdAt: b.bookedAt || new Date().toISOString(),
+          updatedAt: b.bookedAt || new Date().toISOString(),
+        });
+      }
+    }
+    this.savePaymentQueue();
     this.saveBookings();
     this.saveCustomers();
     this.saveLocks();

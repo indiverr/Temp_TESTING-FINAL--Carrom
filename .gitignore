@@ -18,6 +18,9 @@ functions/lib/
 *credential*.json
 *.pem
 *.key
+*.keystore
+*.jks
+local.properties
 
 # Firebase / Emulator logs & caches
 .firebase/

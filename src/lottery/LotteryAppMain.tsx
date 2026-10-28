@@ -10,6 +10,7 @@ import { TodayWinnerScreen } from './components/TodayWinnerScreen';
 import { ResultPaperScreen } from './components/ResultPaperScreen';
 import { ConfigSettingsScreen } from './components/ConfigSettingsScreen';
 import { AvailableTicketsGalleryModal } from './components/AvailableTicketsGalleryModal';
+import { PaymentQueueScreen } from './components/PaymentQueueScreen';
 
 import { lotteryService } from './lotteryService';
 import { liveFirebase } from './liveFirebase';
@@ -30,6 +31,7 @@ import {
   WeeklyTicketPresetsConfig,
   DEFAULT_WEEKLY_PRESETS,
   DayOfWeek,
+  PaymentQueueTask,
 } from './types';
 import {
   Smartphone,
@@ -44,7 +46,7 @@ import {
 
 export const LotteryAppMain: React.FC = () => {
   // Navigation Screens:
-  // 'login' | 'enter-date' | 'inventory' | 'dashboard' | 'unpaid' | 'paid' | 'winners' | 'papers' | 'settings'
+  // 'login' | 'enter-date' | 'inventory' | 'dashboard' | 'unpaid' | 'paid' | 'winners' | 'papers' | 'settings' | 'payment-queue'
   const [currentScreen, setCurrentScreen] = useState<
     | 'login'
     | 'enter-date'
@@ -55,6 +57,7 @@ export const LotteryAppMain: React.FC = () => {
     | 'winners'
     | 'papers'
     | 'settings'
+    | 'payment-queue'
   >('login');
   const [authInitialMode, setAuthInitialMode] = useState<'credentials' | 'signup'>('credentials');
 
@@ -82,6 +85,12 @@ export const LotteryAppMain: React.FC = () => {
 
   // Real-time Ticket Locks state
   const [activeLocks, setActiveLocks] = useState<TicketLock[]>([]);
+
+  // Restricted Payment Queue state (Paid Employee and Admin only)
+  const [paymentQueueTasks, setPaymentQueueTasks] = useState<PaymentQueueTask[]>([]);
+
+  // Persistent Employee Label mapping (Admin only)
+  const [employeeLabelMap, setEmployeeLabelMap] = useState<Record<string, string>>({});
 
   // Cross-screen filter query
   const [dashboardSearchQuery, setDashboardSearchQuery] = useState<string>('');
@@ -154,6 +163,64 @@ export const LotteryAppMain: React.FC = () => {
       document.removeEventListener('backbutton', handleBackButton);
     };
   }, [isGalleryOpen, currentScreen]);
+
+  // Restore authenticated session on page refresh (refresh-login persistence)
+  useEffect(() => {
+    try {
+      const savedSession = localStorage.getItem('carrom_auth_session');
+      if (savedSession) {
+        const parsed = JSON.parse(savedSession);
+        if (parsed && parsed.role && parsed.name) {
+          setIsAuthenticatedAndVerified(true);
+          setCurrentRole(parsed.role);
+          setCurrentStaff({
+            id: parsed.uid || parsed.id || '',
+            name: parsed.name,
+            phone: parsed.phone || '9949311900',
+            role: parsed.role,
+            otpVerified: true,
+          });
+          setCurrentScreen((prev) => {
+            if (prev === 'login') {
+              return parsed.role === 'paid_employee'
+                ? 'payment-queue'
+                : parsed.role === 'admin'
+                ? 'dashboard'
+                : 'enter-date';
+            }
+            return prev;
+          });
+        }
+      }
+    } catch {}
+
+    if (isLiveFirebaseMode) {
+      const unsub = liveFirebase.subscribeAuthState((user) => {
+        if (user && user.otpVerified) {
+          setIsAuthenticatedAndVerified(true);
+          setCurrentRole(user.role);
+          setCurrentStaff({
+            id: user.uid,
+            name: user.name || 'Operator',
+            phone: user.phone || '9949311900',
+            role: user.role,
+            otpVerified: true,
+          });
+          setCurrentScreen((prev) => {
+            if (prev === 'login') {
+              return user.role === 'paid_employee'
+                ? 'payment-queue'
+                : user.role === 'admin'
+                ? 'dashboard'
+                : 'enter-date';
+            }
+            return prev;
+          });
+        }
+      });
+      return () => unsub();
+    }
+  }, [isLiveFirebaseMode]);
 
   // Real-time Firestore sync listener when in live Firebase mode and verified
   useEffect(() => {
@@ -232,17 +299,72 @@ export const LotteryAppMain: React.FC = () => {
     return () => unsubLocal();
   }, [isLiveFirebaseMode, config.businessDate]);
 
+  // Real-time Payment Queue subscription (Paid Employee and Admin only)
+  useEffect(() => {
+    if (!isAuthenticatedAndVerified) {
+      setPaymentQueueTasks([]);
+      return;
+    }
+    if (currentRole !== 'paid_employee' && currentRole !== 'admin') {
+      setPaymentQueueTasks([]);
+      return;
+    }
+    if (isLiveFirebaseMode) {
+      const unsub = liveFirebase.subscribePaymentQueueFirestore(
+        config.businessDate,
+        (tasks) => setPaymentQueueTasks(tasks),
+        (err) => console.warn('[PaymentQueue Error]', err.message),
+        currentRole
+      );
+      return () => unsub();
+    }
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      setPaymentQueueTasks(lotteryService.getPaymentQueue(config.businessDate));
+    });
+    setPaymentQueueTasks(lotteryService.getPaymentQueue(config.businessDate, undefined, currentRole));
+    return () => unsubLocal();
+  }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate, currentRole]);
+
+  // Real-time Employee Label mapping subscription (Admin only)
+  useEffect(() => {
+    if (!isAuthenticatedAndVerified || currentRole !== 'admin') {
+      setEmployeeLabelMap({});
+      return;
+    }
+    if (isLiveFirebaseMode) {
+      const unsub = liveFirebase.subscribeEmployeeLabelsFirestore((map) => {
+        setEmployeeLabelMap(map);
+      });
+      return () => unsub();
+    }
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      setEmployeeLabelMap(lotteryService.getEmployeeLabelMap('admin'));
+    });
+    setEmployeeLabelMap(lotteryService.getEmployeeLabelMap('admin'));
+    return () => unsubLocal();
+  }, [isLiveFirebaseMode, isAuthenticatedAndVerified, currentRole]);
+
   // Guard against unauthorized screen states for non-admin roles
   useEffect(() => {
-    if (
-      isAuthenticatedAndVerified &&
-      currentRole !== 'admin' &&
-      (currentScreen === 'dashboard' ||
-        currentScreen === 'winners' ||
+    if (!isAuthenticatedAndVerified) return;
+    if (currentRole === 'paid_employee') {
+      if (
+        currentScreen !== 'payment-queue' &&
+        currentScreen !== 'enter-date' &&
+        currentScreen !== 'winners' &&
+        currentScreen !== 'login'
+      ) {
+        setCurrentScreen('payment-queue');
+      }
+    } else if (currentRole === 'employee') {
+      if (
+        currentScreen === 'dashboard' ||
         currentScreen === 'papers' ||
-        currentScreen === 'settings')
-    ) {
-      setCurrentScreen('inventory');
+        currentScreen === 'settings' ||
+        currentScreen === 'payment-queue'
+      ) {
+        setCurrentScreen('inventory');
+      }
     }
   }, [isAuthenticatedAndVerified, currentRole, currentScreen]);
 
@@ -257,8 +379,12 @@ export const LotteryAppMain: React.FC = () => {
       | 'winners'
       | 'papers'
       | 'settings'
+      | 'payment-queue'
   ) => {
     if (targetScreen === 'login') {
+      try {
+        localStorage.removeItem('carrom_auth_session');
+      } catch {}
       liveFirebase.signOutUser();
       setIsAuthenticatedAndVerified(false);
       setAuthInitialMode('credentials');
@@ -266,6 +392,8 @@ export const LotteryAppMain: React.FC = () => {
       // Wipe session state so previous user's records never linger
       setAllBookings([]);
       setActiveLocks([]);
+      setPaymentQueueTasks([]);
+      setEmployeeLabelMap({});
       setCurrentRole('employee');
       setCurrentStaff({
         id: '',
@@ -282,13 +410,24 @@ export const LotteryAppMain: React.FC = () => {
     }
 
     // Role-based route authorization guards
-    if (currentRole !== 'admin') {
-      // Employee & Paid Employee cannot access Admin Overview, Winners, Result Sheets, or Settings
+    if (currentRole === 'paid_employee') {
+      // Paid Employee: strictly restricted to Payment Queue, Enter Date, and Winners
+      if (
+        targetScreen !== 'payment-queue' &&
+        targetScreen !== 'enter-date' &&
+        targetScreen !== 'winners'
+      ) {
+        showToast('Access denied: Unauthorized view for your role');
+        setCurrentScreen('payment-queue');
+        return;
+      }
+    } else if (currentRole === 'employee') {
+      // Regular Employee: can access Ticket Grid, Pending, Confirmed, Enter Date, Winners
       if (
         targetScreen === 'dashboard' ||
-        targetScreen === 'winners' ||
         targetScreen === 'papers' ||
-        targetScreen === 'settings'
+        targetScreen === 'settings' ||
+        targetScreen === 'payment-queue'
       ) {
         showToast('Access denied: Unauthorized view for your role');
         setCurrentScreen('inventory');
@@ -299,7 +438,6 @@ export const LotteryAppMain: React.FC = () => {
       if (
         targetScreen === 'unpaid' ||
         targetScreen === 'paid' ||
-        targetScreen === 'winners' ||
         targetScreen === 'papers'
       ) {
         setCurrentScreen('dashboard');
@@ -320,16 +458,33 @@ export const LotteryAppMain: React.FC = () => {
     setCurrentRole(type);
     setCurrentStaff({
       id: authUid,
-      name: name || (type === 'admin' ? 'Sasikaran' : 'Sasikaran'),
+      name: name || (type === 'admin' ? 'Sasikaran' : type === 'paid_employee' ? 'Gogul (Paid)' : 'Sasikaran'),
       phone: '9949311900',
       role: type,
       otpVerified: true,
     });
+    try {
+      localStorage.setItem(
+        'carrom_auth_session',
+        JSON.stringify({
+          uid: authUid,
+          name: name || (type === 'admin' ? 'Sasikaran' : type === 'paid_employee' ? 'Gogul (Paid)' : 'Sasikaran'),
+          role: type,
+          phone: '9949311900',
+        })
+      );
+    } catch {}
     setIsAuthenticatedAndVerified(true);
     // Explicitly reset bookings so no stale records from any previous session linger
     setAllBookings([]);
-    // Advance to Enter Date screen
-    setCurrentScreen('enter-date');
+    setPaymentQueueTasks([]);
+    if (type === 'paid_employee') {
+      setCurrentScreen('payment-queue');
+    } else if (type === 'admin') {
+      setCurrentScreen('dashboard');
+    } else {
+      setCurrentScreen('enter-date');
+    }
   };
 
   const handleAcquireTicketLock = async (ticketNumbers: string[]) => {
@@ -499,6 +654,51 @@ export const LotteryAppMain: React.FC = () => {
       showToast(`Settlement confirmed for #${ticketNum}`);
     } else {
       showToast(res.error || 'Payment confirmation failed');
+    }
+  };
+
+  const handleCompletePaymentTask = async (
+    taskId: string,
+    bookingId: string,
+    amountPaid: number,
+    paymentMethod: string,
+    paymentRef: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (isLiveFirebaseMode) {
+      const fbRes = await liveFirebase.completePaymentTask(
+        taskId,
+        bookingId,
+        amountPaid,
+        paymentMethod,
+        paymentRef,
+        currentStaff
+      );
+      if (fbRes.success) {
+        showToast('Payment task completed.');
+        reloadData();
+        return { success: true };
+      } else {
+        showToast(`[Error] ${fbRes.error || 'Failed to complete task'}`);
+        return { success: false, error: fbRes.error };
+      }
+    }
+
+    const localRes = lotteryService.completePaymentTask(
+      taskId,
+      bookingId,
+      amountPaid,
+      paymentMethod,
+      paymentRef,
+      currentStaff,
+      { idempotencyKey: `idem_pq_${taskId}_${Date.now()}` }
+    );
+    if (localRes.success) {
+      showToast('Payment task completed.');
+      reloadData();
+      return { success: true };
+    } else {
+      showToast(localRes.error || 'Failed to complete task');
+      return { success: false, error: localRes.error };
     }
   };
 
@@ -912,16 +1112,21 @@ export const LotteryAppMain: React.FC = () => {
             >
               Draw Date
             </button>
-            <button
-              onClick={() => navigateProtected('inventory')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentScreen === 'inventory'
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              Ticket Grid
-            </button>
+
+            {/* Ticket Grid: Admin and Regular Employee only (Paid Employee blocked from inventory) */}
+            {currentRole !== 'paid_employee' && (
+              <button
+                onClick={() => navigateProtected('inventory')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  currentScreen === 'inventory'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                Ticket Grid
+              </button>
+            )}
+
             {/* Admin Overview (Admin only) */}
             {currentRole === 'admin' && (
               <button
@@ -935,8 +1140,34 @@ export const LotteryAppMain: React.FC = () => {
                 Overview
               </button>
             )}
-            {/* Non-Admin Tabs: Pending and Confirmed (Both Employee and Paid Employee) */}
-            {currentRole !== 'admin' && (
+
+            {/* Restricted Payment Queue: Paid Employee and Admin only */}
+            {(currentRole === 'paid_employee' || currentRole === 'admin') && (
+              <button
+                onClick={() => navigateProtected('payment-queue')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
+                  currentScreen === 'payment-queue'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <span>Payment Queue</span>
+                {paymentQueueTasks.filter((t) => t.status === 'PENDING').length > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                      currentScreen === 'payment-queue'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-amber-500 text-white animate-pulse'
+                    }`}
+                  >
+                    {paymentQueueTasks.filter((t) => t.status === 'PENDING').length}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* Regular Employee Tabs: Pending and Confirmed */}
+            {currentRole === 'employee' && (
               <>
                 <button
                   onClick={() => navigateProtected('unpaid')}
@@ -978,6 +1209,30 @@ export const LotteryAppMain: React.FC = () => {
                 </button>
               </>
             )}
+
+            {/* Winners Tab: Available to ALL verified roles (Requirement 7) */}
+            <button
+              onClick={() => navigateProtected('winners')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1.5 ${
+                currentScreen === 'winners'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <span>Winners</span>
+              {winners.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                    currentScreen === 'winners'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-amber-100 text-amber-800 border border-amber-200'
+                  }`}
+                >
+                  {winners.length}
+                </span>
+              )}
+            </button>
+
             {/* Admin Settings (Admin only) */}
             {currentRole === 'admin' && (
               <button
@@ -1138,14 +1393,30 @@ export const LotteryAppMain: React.FC = () => {
                   }}
                 />
               )}
-              {isAuthenticatedAndVerified && currentScreen === 'winners' && currentRole === 'admin' && (
+              {isAuthenticatedAndVerified && currentScreen === 'payment-queue' && (
+                <PaymentQueueScreen
+                  tasks={paymentQueueTasks}
+                  drawDate={config.businessDate}
+                  currentRole={currentRole}
+                  currentStaffName={currentStaff.name}
+                  employeeLabelMap={employeeLabelMap}
+                  onCompleteTask={handleCompletePaymentTask}
+                  onRefresh={() => reloadData()}
+                  onBack={currentRole === 'admin' ? () => navigateProtected('dashboard') : undefined}
+                />
+              )}
+              {isAuthenticatedAndVerified && currentScreen === 'winners' && (
                 <TodayWinnerScreen
                   winners={winners}
                   currentRole={currentRole}
                   businessDate={config.businessDate}
                   seriesTitle={config.seriesTitle}
                   onAddWinner={handleAddWinner}
-                  onBack={() => navigateProtected('dashboard')}
+                  onBack={() => {
+                    if (currentRole === 'admin') navigateProtected('dashboard');
+                    else if (currentRole === 'paid_employee') navigateProtected('payment-queue');
+                    else navigateProtected('inventory');
+                  }}
                 />
               )}
               {isAuthenticatedAndVerified && currentScreen === 'papers' && currentRole === 'admin' && (
@@ -1270,14 +1541,30 @@ export const LotteryAppMain: React.FC = () => {
                 }}
               />
             )}
-            {isAuthenticatedAndVerified && currentScreen === 'winners' && currentRole === 'admin' && (
+            {isAuthenticatedAndVerified && currentScreen === 'payment-queue' && (
+              <PaymentQueueScreen
+                tasks={paymentQueueTasks}
+                drawDate={config.businessDate}
+                currentRole={currentRole}
+                currentStaffName={currentStaff.name}
+                employeeLabelMap={employeeLabelMap}
+                onCompleteTask={handleCompletePaymentTask}
+                onRefresh={() => reloadData()}
+                onBack={currentRole === 'admin' ? () => navigateProtected('dashboard') : undefined}
+              />
+            )}
+            {isAuthenticatedAndVerified && currentScreen === 'winners' && (
               <TodayWinnerScreen
                 winners={winners}
                 currentRole={currentRole}
                 businessDate={config.businessDate}
                 seriesTitle={config.seriesTitle}
                 onAddWinner={handleAddWinner}
-                onBack={() => navigateProtected('dashboard')}
+                onBack={() => {
+                  if (currentRole === 'admin') navigateProtected('dashboard');
+                  else if (currentRole === 'paid_employee') navigateProtected('payment-queue');
+                  else navigateProtected('inventory');
+                }}
               />
             )}
             {isAuthenticatedAndVerified && currentScreen === 'papers' && currentRole === 'admin' && (

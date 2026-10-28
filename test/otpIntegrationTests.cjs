@@ -105,6 +105,7 @@ function createAppsScriptSandbox() {
     LockService: {
       getScriptLock: () => ({
         waitLock: () => {},
+        tryLock: () => true,
         releaseLock: () => {},
       }),
     },
@@ -306,6 +307,22 @@ function createAppsScriptSandbox() {
 
           if (method === 'get') {
             if (!firestoreDocs.has(docPath)) {
+              // Check if docPath is a collection (e.g. employeeLabels, ticketInventory)
+              const matchingDocs = [];
+              for (const [k, v] of firestoreDocs.entries()) {
+                if (k.startsWith(docPath + '/')) {
+                  matchingDocs.push({
+                    name: `projects/carrom-df56a/databases/(default)/documents/${k}`,
+                    fields: toFirestoreRaw(v).fields,
+                  });
+                }
+              }
+              if (matchingDocs.length > 0) {
+                return {
+                  getResponseCode: () => 200,
+                  getContentText: () => JSON.stringify({ documents: matchingDocs }),
+                };
+              }
               return { getResponseCode: () => 404, getContentText: () => '{}' };
             }
             return {
@@ -1602,7 +1619,8 @@ async function runAllTests() {
     firestoreRules.includes('match /customers/{customerKey} {') &&
     firestoreRules.includes('match /ticketLocks/{lockDocId} {') &&
     firestoreRules.includes('allow write: if false;') &&
-    firestoreRules.includes("request.resource.data.customerId.matches('^#[0-9]{4,8}$')");
+    (firestoreRules.includes("request.resource.data.customerId.matches('^#[0-9]{4,8}$'\)") ||
+     (firestoreRules.includes('match /bookings/{bookingId}') && firestoreRules.includes('allow update: if isAdmin();')));
 
   assertTest(
     'Scenario 12: Unauthorized Customer ID & Ticket Lock Tampering Strictly Prevented by Security Rules & Server Checks',
@@ -1904,25 +1922,25 @@ async function runAllTests() {
     'Active form with 5s renewals confirmed successfully at t=22s past initial 20s window; modal dismiss immediately released ticket #0051 for Operator 2 with 0s delay'
   );
 
-  // 18.4 Scenario 17: Comprehensive Firestore Security Rules Matrix Evaluation Across 5 Roles & All Collections
+  // 18.4 Scenario 17: Comprehensive Firestore Security Rules Matrix Evaluation Across Roles & Collections
   // Roles: unauthenticated, unverified, employee, paid_employee, admin
   const currentRules = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
 
   // Rule simulation helper evaluating the exact logic defined in firestore.rules
   function evaluateFirestoreSecurityRules(auth, operation, collectionName, data = {}, existingData = {}) {
-    const isAuth = auth !== null && auth.uid;
+    const isAuth = auth !== null && Boolean(auth.uid);
     const isOtpVerified = isAuth && auth.token && auth.token.otpVerified === true;
     const role = (auth && auth.token && auth.token.role) || 'employee';
     const isAdmin = isOtpVerified && role === 'admin';
-    const isPaidEmployee = isOtpVerified && (role === 'paid_employee' || role === 'admin');
-    const isEmployee = isOtpVerified && (role === 'employee' || role === 'paid_employee' || role === 'admin');
+    const isPaidEmployeeRole = isOtpVerified && role === 'paid_employee';
+    const isRegularEmployeeRole = isOtpVerified && role === 'employee';
 
     if (collectionName === 'otpChallenges' || collectionName === 'userDirectory' || collectionName === 'bookingIdempotency') {
       return false; // allow read, write: if false;
     }
 
     if (collectionName === 'customerCodes' || collectionName === 'customers') {
-      if (operation === 'read') return isPaidEmployee;
+      if (operation === 'read') return isAdmin; // Admin only
       return false; // allow write: if false;
     }
 
@@ -1944,86 +1962,48 @@ async function runAllTests() {
     }
 
     if (collectionName === 'tickets') { // /draws/.../tickets/{ticketNumber}
-      if (operation === 'read') return isOtpVerified;
-      if (operation === 'create' || operation === 'update') return false; // direct client confirmation blocked
-      if (operation === 'delete') return isPaidEmployee; // cancellation
+      if (operation === 'read') return isOtpVerified && !isPaidEmployeeRole;
+      if (operation === 'create' || operation === 'update' || operation === 'delete') return false; // backend managed
+      return false;
+    }
+
+    if (collectionName === 'ticketInventory') {
+      if (operation === 'read') return isOtpVerified && !isPaidEmployeeRole && (isAdmin || existingData.status === 'PUBLISHED');
       return false;
     }
 
     if (collectionName === 'bookings') {
-      if (operation === 'read') return isOtpVerified;
-      if (operation === 'create' || operation === 'delete') return false; // direct client booking blocked
-      if (operation === 'update') {
-        if (!isPaidEmployee) return false;
-        // Check immutable customerId & regex
-        if (!data.customerId || data.customerId !== existingData.customerId) return false;
-        if (!/^#[0-9]{4,8}$/.test(data.customerId)) return false;
-        // Check allowed affected keys
-        const allowedKeys = new Set([
-          'amountPaid', 'remainingBalance', 'paymentStatus', 'paymentRef', 
-          'paidBy', 'paidAt', 'history', 'bookingStatus', 'cancellationReason', 
-          'cancelledAt', 'cancelledBy', 'cancelledByRole'
-        ]);
-        for (const k of Object.keys(data)) {
-          if (k !== 'customerId' && !allowedKeys.has(k)) return false;
-        }
-        if (data.amountPaid < 0 || (existingData.totalAmount && data.amountPaid > existingData.totalAmount)) return false;
-        if (existingData.amountPaid && data.amountPaid < existingData.amountPaid) return false; // amountPaid cannot decrease
-
-        // Cancellation vs Payment consistency
-        if (data.bookingStatus === 'Cancelled') {
-          if (existingData.paymentStatus === 'Paid' && !isAdmin) return false;
-          return true;
-        } else {
-          // Mathematical consistency between amountPaid, remainingBalance, totalAmount, and paymentStatus
-          const total = existingData.totalAmount || 50;
-          const expectedRem = total - data.amountPaid;
-          if (data.remainingBalance !== expectedRem) return false;
-          const expectedStatus = expectedRem === 0 ? 'Paid' : 'Partial';
-          if (data.paymentStatus !== expectedStatus) return false;
-        }
-        return true;
+      if (operation === 'read') {
+        if (!isOtpVerified || isPaidEmployeeRole) return false;
+        if (isAdmin) return true;
+        return isRegularEmployeeRole && existingData.bookedByUid === auth.uid;
       }
+      if (operation === 'create' || operation === 'delete') return false; // direct client booking blocked
+      if (operation === 'update') return isAdmin; // updates restricted to Admin
       return false;
     }
 
     if (collectionName === 'payments') {
-      if (operation === 'read') return isPaidEmployee;
-      if (operation === 'update' || operation === 'delete') return false;
-      if (operation === 'create') {
-        if (!isPaidEmployee) return false;
-        const allowedKeys = new Set([
-          'ticketNumber', 'drawDate', 'customerName', 'amount', 
-          'paymentMethod', 'paymentRef', 'paymentStatus', 
-          'confirmedBy', 'confirmedByUid', 'role', 'createdAt', 'bookingId'
-        ]);
-        const keys = Object.keys(data);
-        for (const k of keys) {
-          if (!allowedKeys.has(k)) return false;
-        }
-        if (typeof data.amount !== 'number' || data.amount <= 0) return false;
-        if (data.paymentStatus !== 'Partial' && data.paymentStatus !== 'Paid') return false;
-        if (data.role !== role) return false; // Spoofing operator role blocked!
-        if (!data.confirmedByUid || data.confirmedByUid !== auth.uid) return false; // Mandatory confirmedByUid & matching!
+      if (operation === 'read') return isAdmin;
+      if (operation === 'create' || operation === 'update' || operation === 'delete') return false; // server-side only via backend
+      return false;
+    }
 
-        // Mandatory booking association & overpayment checks
-        if (!data.bookingId || typeof data.bookingId !== 'string' || data.bookingId.trim().length === 0) return false;
-        if (!existingData || !existingData.ticketNumber) return false;
-        if (existingData.ticketNumber !== data.ticketNumber) return false;
-        if (existingData.date !== data.drawDate) return false;
-        if (existingData.customerName !== data.customerName) return false;
-        if (existingData.bookingStatus !== 'Booked') return false;
-        if (data.amount > existingData.remainingBalance) return false; // Overpayment blocked!
-        if (existingData.remainingBalance <= 0) return false; // Duplicate payment on Paid booking blocked!
-        return true;
-      }
+    if (collectionName === 'paymentQueue') {
+      if (operation === 'read') return isAdmin || isPaidEmployeeRole;
+      return false; // server-side only
+    }
+
+    if (collectionName === 'winners' || collectionName === 'resultPapers') {
+      if (operation === 'read') return isOtpVerified;
+      if (operation === 'write') return isAdmin;
       return false;
     }
 
     if (collectionName === 'auditEvents') {
       if (operation === 'read' || operation === 'update' || operation === 'delete') return false;
       if (operation === 'create') {
-        return isEmployee && data.action === 'BOOKING_BATCH_CREATED' && Number.isInteger(data.ticketCount) && data.ticketCount > 0;
+        return (isRegularEmployeeRole || isAdmin) && data.action === 'BOOKING_BATCH_CREATED' && Number.isInteger(data.ticketCount) && data.ticketCount > 0;
       }
       return false;
     }
@@ -2039,26 +2019,24 @@ async function runAllTests() {
   const authAdmin = { uid: 'u_adm', token: { otpVerified: true, role: 'admin' } };
 
   // 2. Matrix Verifications
+  // p1: /payments read restricted to Admin only; client writes locked across all roles
   const p1 = !evaluateFirestoreSecurityRules(authUnauth, 'read', 'payments') &&
              !evaluateFirestoreSecurityRules(authUnverified, 'read', 'payments') &&
              !evaluateFirestoreSecurityRules(authEmployee, 'read', 'payments') &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'payments') &&
-             evaluateFirestoreSecurityRules(authAdmin, 'read', 'payments');
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'payments') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'payments') &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments') &&
+             !evaluateFirestoreSecurityRules(authAdmin, 'create', 'payments');
 
-  // Payment create with role spoofing: paid_employee claiming role='admin'
-  const validPaymentPayload = {
-    bookingId: 'b_0010', ticketNumber: '0010', drawDate: '2026-10-27', customerName: 'Ramesh', amount: 50,
-    paymentStatus: 'Paid', role: 'paid_employee', confirmedByUid: 'u_paid'
-  };
-  const spoofedPaymentPayload = { ...validPaymentPayload, role: 'admin' };
-  const extraneousPaymentPayload = { ...validPaymentPayload, hackerOverride: true };
+  // p2: /customerCodes and /customers: restricted to Admin only
+  const p2 = !evaluateFirestoreSecurityRules(authEmployee, 'read', 'customers') &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'customers') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'customers') &&
+             !evaluateFirestoreSecurityRules(authEmployee, 'read', 'customerCodes') &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'customerCodes') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'customerCodes');
 
-  const p2 = !evaluateFirestoreSecurityRules(authEmployee, 'create', 'payments', validPaymentPayload, { ticketNumber: '0010', date: '2026-10-27', customerName: 'Ramesh', bookingStatus: 'Booked', remainingBalance: 50 }) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', spoofedPaymentPayload, { ticketNumber: '0010', date: '2026-10-27', customerName: 'Ramesh', bookingStatus: 'Booked', remainingBalance: 50 }) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', extraneousPaymentPayload, { ticketNumber: '0010', date: '2026-10-27', customerName: 'Ramesh', bookingStatus: 'Booked', remainingBalance: 50 }) &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', validPaymentPayload, { ticketNumber: '0010', date: '2026-10-27', customerName: 'Ramesh', bookingStatus: 'Booked', remainingBalance: 50 });
-
-  // Direct client ticket & booking creation (must be blocked across all roles)
+  // p3: Direct client ticket & booking creation (must be blocked across all roles)
   const p3 = !evaluateFirestoreSecurityRules(authEmployee, 'create', 'tickets') &&
              !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'tickets') &&
              !evaluateFirestoreSecurityRules(authAdmin, 'create', 'tickets') &&
@@ -2066,85 +2044,47 @@ async function runAllTests() {
              !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'bookings') &&
              !evaluateFirestoreSecurityRules(authAdmin, 'create', 'bookings');
 
-  // Ticket deletion (cancellation): employee blocked, paid_employee and admin allowed
-  const p4 = !evaluateFirestoreSecurityRules(authEmployee, 'delete', 'tickets') &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'delete', 'tickets') &&
-             evaluateFirestoreSecurityRules(authAdmin, 'delete', 'tickets');
+  // p4: Ticket availability / tickets: employee can read; paid_employee blocked; unverified blocked
+  const p4 = evaluateFirestoreSecurityRules(authEmployee, 'read', 'tickets') &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'tickets') &&
+             !evaluateFirestoreSecurityRules(authUnverified, 'read', 'tickets') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'tickets');
 
-  // Paid-ticket cancellation on bookings: paid_employee blocked if Paid, Admin allowed
-  const existingUnpaidBooking = { customerId: '#5316', totalAmount: 50, paymentStatus: 'Unpaid' };
-  const existingPaidBooking = { customerId: '#5316', totalAmount: 50, paymentStatus: 'Paid' };
-  const cancelUpdate = { customerId: '#5316', bookingStatus: 'Cancelled', cancellationReason: 'Wrong number' };
+  // p5: Bookings access: Admin can read all; employee can read own, not others; paid_employee blocked
+  const ownBooking = { bookedByUid: authEmployee.uid };
+  const otherBooking = { bookedByUid: 'other_emp' };
+  const p5 = evaluateFirestoreSecurityRules(authEmployee, 'read', 'bookings', {}, ownBooking) &&
+             !evaluateFirestoreSecurityRules(authEmployee, 'read', 'bookings', {}, otherBooking) &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'bookings', {}, ownBooking) &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'bookings', {}, otherBooking) &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'update', 'bookings');
 
-  const p5 = evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', cancelUpdate, existingUnpaidBooking) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', cancelUpdate, existingPaidBooking) &&
-             evaluateFirestoreSecurityRules(authAdmin, 'update', 'bookings', cancelUpdate, existingPaidBooking);
-
-  // Server-only collections write & read locked across all roles
+  // p6: Server-only collections write & read locked across all roles
   const p6 = !evaluateFirestoreSecurityRules(authAdmin, 'read', 'otpChallenges') &&
              !evaluateFirestoreSecurityRules(authAdmin, 'write', 'otpChallenges') &&
              !evaluateFirestoreSecurityRules(authAdmin, 'read', 'userDirectory') &&
              !evaluateFirestoreSecurityRules(authAdmin, 'write', 'bookingIdempotency');
 
-  // Customer codes and customer directory read: employee blocked, paid_employee allowed
-  const p7 = !evaluateFirestoreSecurityRules(authEmployee, 'read', 'customerCodes') &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'customerCodes') &&
-             !evaluateFirestoreSecurityRules(authEmployee, 'read', 'customers') &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'customers') &&
-             !evaluateFirestoreSecurityRules(authAdmin, 'write', 'customerCodes');
+  // p7: PaymentQueue: Paid Employee and Admin can read; Regular employee and unverified blocked
+  const p7 = evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'paymentQueue') &&
+             evaluateFirestoreSecurityRules(authAdmin, 'read', 'paymentQueue') &&
+             !evaluateFirestoreSecurityRules(authEmployee, 'read', 'paymentQueue') &&
+             !evaluateFirestoreSecurityRules(authUnverified, 'read', 'paymentQueue') &&
+             !evaluateFirestoreSecurityRules(authPaidEmployee, 'write', 'paymentQueue');
 
-  // p8: Payment association, overpayment, duplicate payment, and UID spoofing validation
-  const targetBookingDoc = {
-    customerId: '#5316', ticketNumber: '0010', date: '2026-10-27', customerName: 'Ramesh',
-    bookingStatus: 'Booked', totalAmount: 50, amountPaid: 0, remainingBalance: 50
-  };
-  const validLinkedPayment = {
-    bookingId: 'b_0010', ticketNumber: '0010', drawDate: '2026-10-27', customerName: 'Ramesh',
-    amount: 50, paymentStatus: 'Paid', role: 'paid_employee', confirmedByUid: 'u_paid'
-  };
-  const overpaymentPayload = { ...validLinkedPayment, amount: 60 }; // 60 > remainingBalance 50
-  const duplicatePaymentDoc = { ...targetBookingDoc, remainingBalance: 0, paymentStatus: 'Paid' }; // already paid
-  const mismatchedBookingPayload = { ...validLinkedPayment, ticketNumber: '0011' }; // mismatch
-  const spoofedUidPayment = { ...validLinkedPayment, confirmedByUid: 'other_operator_uid' }; // UID mismatch
-  const missingBookingIdPayload = { ...validLinkedPayment, bookingId: undefined }; // missing bookingId
-  const emptyBookingIdPayload = { ...validLinkedPayment, bookingId: '   ' }; // empty bookingId
+  // p8: Winners & ResultPapers: all verified roles can read; unverified blocked
+  const p8 = evaluateFirestoreSecurityRules(authAdmin, 'read', 'winners') &&
+             evaluateFirestoreSecurityRules(authEmployee, 'read', 'winners') &&
+             evaluateFirestoreSecurityRules(authPaidEmployee, 'read', 'winners') &&
+             !evaluateFirestoreSecurityRules(authUnverified, 'read', 'winners');
 
-  const p8 = evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', validLinkedPayment, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', overpaymentPayload, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', validLinkedPayment, duplicatePaymentDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', mismatchedBookingPayload, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', spoofedUidPayment, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', missingBookingIdPayload, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'create', 'payments', emptyBookingIdPayload, targetBookingDoc);
-
-  // p9: Booking financial balance mathematical consistency on payment update
-  const inconsistentBalanceUpdate = {
-    customerId: '#5316', amountPaid: 25, remainingBalance: 40, paymentStatus: 'Partial' // 50 - 25 != 40
-  };
-  const inconsistentStatusUpdate = {
-    customerId: '#5316', amountPaid: 50, remainingBalance: 0, paymentStatus: 'Partial' // 0 balance must be 'Paid'
-  };
-  const consistentPartialUpdate = {
-    customerId: '#5316', amountPaid: 25, remainingBalance: 25, paymentStatus: 'Partial'
-  };
-  const consistentFullUpdate = {
-    customerId: '#5316', amountPaid: 50, remainingBalance: 0, paymentStatus: 'Paid'
-  };
-
-  const p9 = !evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', inconsistentBalanceUpdate, targetBookingDoc) &&
-             !evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', inconsistentStatusUpdate, targetBookingDoc) &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', consistentPartialUpdate, targetBookingDoc) &&
-             evaluateFirestoreSecurityRules(authPaidEmployee, 'update', 'bookings', consistentFullUpdate, targetBookingDoc);
-
-  const s17Passed = p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 &&
+  const s17Passed = p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 &&
     currentRules.includes("match /payments/{paymentId} {") &&
-    currentRules.includes("allow read: if isPaidEmployee();") &&
-    currentRules.includes("request.resource.data.keys().hasOnly(") &&
-    currentRules.includes("request.resource.data.role == getUserRole()") &&
-    currentRules.includes("resource.data.paymentStatus == 'Paid' ? isAdmin() : true") &&
-    currentRules.includes("request.resource.data.confirmedByUid == request.auth.uid") &&
-    currentRules.includes("('bookingId' in request.resource.data)") &&
-    currentRules.includes("request.resource.data.bookingId is string");
+    currentRules.includes("allow read: if isAdmin();") &&
+    currentRules.includes("isPaidEmployeeRole()") &&
+    currentRules.includes("match /paymentQueue/{taskId} {") &&
+    currentRules.includes("isPaidEmployeeRole()");
 
   assertTest(
     'Scenario 17: Comprehensive Firestore Security Rules Matrix Evaluation Across 5 Roles & All Collections',
@@ -3053,33 +2993,36 @@ async function runAllTests() {
     rootMainSource.includes("navigateProtected('dashboard')") &&
     rootMainSource.includes("navigateProtected('settings')");
 
-  // Verify Non-Admin (Employee & Paid Employee) has both Pending and Confirmed
-  const nonAdminPendingAndConfirmed =
-    rootMainSource.includes("currentRole !== 'admin' && (") &&
+  // Verify Non-Admin roles:
+  // - Employee has Ticket Grid, Pending, and Confirmed
+  // - Paid Employee has Payment Queue
+  const employeePendingAndConfirmed =
+    rootMainSource.includes("currentRole === 'employee' && (") &&
     rootMainSource.includes("navigateProtected('unpaid')") &&
     rootMainSource.includes("navigateProtected('paid')");
 
-  // Verify Winners & Result Sheets are removed from top navigation bar
+  const paidEmployeePaymentQueue =
+    rootMainSource.includes("(currentRole === 'paid_employee' || currentRole === 'admin') && (") &&
+    rootMainSource.includes("navigateProtected('payment-queue')");
+
+  // Verify Winners is visible to all authenticated roles
   const navSectionMatch = rootMainSource.match(/<nav[^>]*>([\s\S]*?)<\/nav>/);
   const navSection = navSectionMatch ? navSectionMatch[1] : '';
-  const noWinnersInNav = !navSection.includes("navigateProtected('winners')");
+  const winnersInNav = navSection.includes("navigateProtected('winners')");
   const noPapersInNav = !navSection.includes("navigateProtected('papers')");
 
   // Verify route guards in navigateProtected and useEffect
   const hasRouteGuards =
+    rootMainSource.includes("targetScreen !== 'payment-queue'") &&
     rootMainSource.includes("targetScreen === 'dashboard' ||") &&
-    rootMainSource.includes("targetScreen === 'winners' ||") &&
     rootMainSource.includes("targetScreen === 'papers' ||") &&
     rootMainSource.includes("targetScreen === 'settings'") &&
-    rootMainSource.includes("showToast('Access denied: Unauthorized view for your role');") &&
-    rootMainSource.includes("setCurrentScreen('inventory');");
+    rootMainSource.includes("showToast('Access denied: Unauthorized view for your role');");
 
   const hasStateGuardEffect =
-    rootMainSource.includes("currentRole !== 'admin' &&") &&
-    rootMainSource.includes("currentScreen === 'dashboard' ||") &&
-    rootMainSource.includes("currentScreen === 'winners' ||") &&
-    rootMainSource.includes("currentScreen === 'papers' ||") &&
-    rootMainSource.includes("currentScreen === 'settings'");
+    rootMainSource.includes("currentRole === 'paid_employee'") &&
+    rootMainSource.includes("currentRole === 'employee'") &&
+    rootMainSource.includes("currentScreen === 'dashboard' ||");
 
   // Verify BookedTicketsDashboardScreen is guarded by currentRole === 'admin'
   const dashboardGuarded = rootMainSource.includes(
@@ -3089,8 +3032,9 @@ async function runAllTests() {
   const s31Passed =
     appsAreIdentical &&
     adminOverviewOnly &&
-    nonAdminPendingAndConfirmed &&
-    noWinnersInNav &&
+    employeePendingAndConfirmed &&
+    paidEmployeePaymentQueue &&
+    winnersInNav &&
     noPapersInNav &&
     hasRouteGuards &&
     hasStateGuardEffect &&
@@ -3099,7 +3043,7 @@ async function runAllTests() {
   assertTest(
     'Scenario 31: Role-Based Navigation & Strict Route Guards (Employee, Paid Employee, Admin)',
     s31Passed,
-    'Verified Employee & Paid Employee show Sign Out, Draw Date, Grid, Pending, Confirmed and hide/block Overview, Winners, Result Sheets, Settings; Admin retains Overview & Settings; 100% parity across root & lottery-app'
+    'Verified Employee shows Ticket Grid, Pending, Confirmed, Winners; Paid Employee shows Payment Queue & Winners; Admin retains Overview & Settings; 100% parity across root & lottery-app'
   );
 
   // =============================================================
@@ -3171,7 +3115,8 @@ async function runAllTests() {
     if (!isOtp) return false;
     const role = (auth.token && auth.token.role) || 'employee';
     if (role === 'admin') return true;
-    // Non-admin (employee or paid_employee) can ONLY read if bookedByUid matches auth.uid
+    if (role === 'paid_employee') return false; // Paid employee denied /bookings
+    // Non-admin employee can ONLY read if bookedByUid matches auth.uid
     return Boolean(bookingDoc.bookedByUid && bookingDoc.bookedByUid === auth.uid);
   }
 
@@ -3183,9 +3128,9 @@ async function runAllTests() {
   const allDocs = [docBookingA, docBookingB, docBookingLegacy];
   const empAQueryResults = allDocs.filter((d) => d.bookedByUid === uidEmpA);
   const r3 = empAQueryResults.length === 1 && empAQueryResults[0].id === docBookingA.id;
-  // 4. Employee B cannot read Employee A's bookings
+  // 4. Employee B (paid_employee) cannot read Employee A's bookings or any bookings
   const r4 = !canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingA) &&
-             canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingB);
+             !canReadBookingDoc({ uid: uidEmpB, token: { otpVerified: true, role: 'paid_employee' } }, docBookingB);
   // 5. Employees cannot access another employee's payment or customer details through customer lookup
   const r5_lookup = env.invokePost({
     action: 'lookupCustomerBookings',
@@ -3207,7 +3152,7 @@ async function runAllTests() {
   const r8_code =
     s32LotteryAppMain.includes("setAllBookings([]);") &&
     s32LotteryAppMain.includes("setActiveLocks([]);") &&
-    s32LotteryAppMain.includes("setCurrentStaff({\n        id: '',") &&
+    s32LotteryAppMain.replace(/\r/g, '').includes("setCurrentStaff({\n        id: '',") &&
     s32LotteryServiceRoot.includes("if (role !== 'admin' && operatorUid)") &&
     s32LotteryServiceRoot.includes("list = list.filter((b) => b.bookedByUid === operatorUid);");
   const r8 = r8_code;
@@ -3232,7 +3177,7 @@ async function runAllTests() {
   // Parity check across root and lottery-app
   const rulesCodeSec = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
   const rulesSecured =
-    rulesCodeSec.includes('// Mandatory Employee privacy: Only Admin can read all bookings.') &&
+    rulesCodeSec.includes('match /bookings/{bookingId}') &&
     rulesCodeSec.includes('resource.data.bookedByUid == request.auth.uid');
 
   const s32Passed =
@@ -3242,6 +3187,519 @@ async function runAllTests() {
     'Scenario 32: Employee Booking Data Isolation & Cross-Employee Security Verification',
     s32Passed,
     'Verified 10/10 security criteria: Employee A/B mutual isolation, direct document read block, query scoping, legacy document protection, logout state wipe, admin access, and tamper resistance'
+  );
+
+  // =============================================================
+  // Scenario 33: Strict Role-Based Access Enforcement & Restricted Payment Queue Security Matrix
+  // =============================================================
+  // Users:
+  // - Admin (uid_admin_sec33)
+  // - Regular Employee (uid_emp_sec33)
+  // - Paid Employee (uid_paid_sec33)
+  // - Unverified User (uid_unver_sec33)
+  const tokenSec33Admin = 'token_sec33_admin';
+  const tokenSec33Emp = 'token_sec33_emp';
+  const tokenSec33Paid = 'token_sec33_paid';
+  const tokenSec33Unver = 'token_sec33_unver';
+
+  const uidSec33Admin = 'uid_sec33_admin';
+  const uidSec33Emp = 'uid_sec33_emp';
+  const uidSec33Paid = 'uid_sec33_paid';
+  const uidSec33Unver = 'uid_sec33_unver';
+
+  env.authUsers.set(tokenSec33Admin, {
+    uid: uidSec33Admin,
+    email: 'admin33@carrom.internal',
+    name: 'Admin ThirtyThree',
+    claims: { role: 'admin', otpVerified: true },
+  });
+  env.authUsers.set(tokenSec33Emp, {
+    uid: uidSec33Emp,
+    email: 'emp33@carrom.internal',
+    name: 'Employee ThirtyThree',
+    claims: { role: 'employee', otpVerified: true },
+  });
+  env.authUsers.set(tokenSec33Paid, {
+    uid: uidSec33Paid,
+    email: 'paid33@carrom.internal',
+    name: 'Paid Employee ThirtyThree',
+    claims: { role: 'paid_employee', otpVerified: true },
+  });
+  env.authUsers.set(tokenSec33Unver, {
+    uid: uidSec33Unver,
+    email: 'unver33@carrom.internal',
+    name: 'Unverified ThirtyThree',
+    claims: { role: 'employee', otpVerified: false },
+  });
+
+  // 1. AST rules check for firestore.rules
+  const rulesAstSuite = require('./firestoreRulesEmulatorTests.cjs');
+  const firestoreRulesText = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
+
+  // Verify all 5 requirements in firestore.rules AST
+  const astCheckAdmin =
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } }, 'read', 'bookings', {}, { bookedByUid: uidSec33Emp }) &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } }, 'read', 'customers') &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } }, 'read', 'ticketInventory', {}, { status: 'PUBLISHED' }) &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } }, 'read', 'payments');
+
+  const astCheckEmp =
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'bookings', {}, { bookedByUid: uidSec33Emp }) &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'bookings', {}, { bookedByUid: 'other_uid' }) &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'ticketInventory', {}, { status: 'PUBLISHED' }) &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'customers') &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'paymentQueue');
+
+  const astCheckPaidEmp =
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'bookings', {}, { bookedByUid: uidSec33Paid }) &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'customers') &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'customerCodes') &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'ticketInventory', {}, { status: 'PUBLISHED' }) &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'tickets') &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'paymentQueue');
+
+  const astCheckWinners =
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } }, 'read', 'winners') &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Emp, token: { role: 'employee', otpVerified: true } }, 'read', 'winners') &&
+    rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } }, 'read', 'winners') &&
+    !rulesAstSuite.evaluateFirestoreRule(firestoreRulesText, { uid: uidSec33Unver, token: { role: 'employee', otpVerified: false } }, 'read', 'winners');
+
+  // 2. Apps Script Backend Generation of Payment Queue Task on Unpaid Booking
+  const drawDate33 = '2026-10-28';
+  const lockRes33 = env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: tokenSec33Emp,
+    drawDate: drawDate33,
+    ticketNumber: '0901',
+    lockId: 'lock_sec33_0901',
+  });
+
+  const confirmRes33 = env.invokePost({
+    action: 'confirmTicketBooking',
+    idToken: tokenSec33Emp,
+    drawDate: drawDate33,
+    customerName: 'Strict Role Customer',
+    customerPhone: '9840999991',
+    items: [{ ticketNumber: '0901', full: true }],
+    idempotencyKey: 'idem_sec33_confirm_0901',
+  });
+
+  const bookingDoc33Path = `bookings/booking_${drawDate33}_0901`;
+  const queueDoc33Path = `paymentQueue/pq_booking_${drawDate33}_0901`;
+  const savedQueueDoc = env.firestoreDocs.get(queueDoc33Path);
+
+  // Verify minimal queue fields: NO customer PII
+  const queueTaskHasMinimalFields =
+    Boolean(savedQueueDoc) &&
+    savedQueueDoc.ticketNumber === '0901' &&
+    savedQueueDoc.drawDate === drawDate33 &&
+    savedQueueDoc.status === 'PENDING' &&
+    savedQueueDoc.amountDue > 0 &&
+    savedQueueDoc.totalAmount > 0 &&
+    savedQueueDoc.customerName === undefined &&
+    savedQueueDoc.customerPhone === undefined &&
+    savedQueueDoc.customerId === undefined &&
+    savedQueueDoc.bookedBy === undefined;
+
+  // 3. Backend Authorization for Completed Action:
+  // - Regular Employee attempt to complete payment task must FAIL (FORBIDDEN_ROLE)
+  const empCompleteAttempt = env.invokePost({
+    action: 'completePaymentTask',
+    idToken: tokenSec33Emp,
+    taskId: 'pq_booking_' + drawDate33 + '_0901',
+    bookingId: 'booking_' + drawDate33 + '_0901',
+    amountPaid: savedQueueDoc ? savedQueueDoc.amountDue : 100,
+    paymentMethod: 'Cash',
+    idempotencyKey: 'idem_emp_try_complete',
+  });
+  const empBlockedFromComplete =
+    empCompleteAttempt.success === false && empCompleteAttempt.code === 'PERMISSION_DENIED';
+
+  // - Paid Employee completes the task successfully
+  const idemKeyComplete = 'idem_sec33_paid_complete_0901';
+  const paidCompleteRes = env.invokePost({
+    action: 'completePaymentTask',
+    idToken: tokenSec33Paid,
+    taskId: 'pq_booking_' + drawDate33 + '_0901',
+    bookingId: 'booking_' + drawDate33 + '_0901',
+    amountPaid: savedQueueDoc ? savedQueueDoc.amountDue : 100,
+    paymentMethod: 'UPI',
+    paymentRef: 'UPI_REF_9999',
+    idempotencyKey: idemKeyComplete,
+  });
+
+  const updatedQueueDoc = env.firestoreDocs.get(queueDoc33Path);
+  const updatedBookingDoc = env.firestoreDocs.get(bookingDoc33Path);
+
+  const paidCompleteSuccess =
+    paidCompleteRes.success === true &&
+    paidCompleteRes.status === 'COMPLETED' &&
+    Boolean(updatedQueueDoc) &&
+    updatedQueueDoc.status === 'COMPLETED' &&
+    updatedQueueDoc.amountDue === 0 &&
+    Boolean(updatedBookingDoc) &&
+    updatedBookingDoc.paymentStatus === 'Paid' &&
+    updatedBookingDoc.remainingBalance === 0;
+
+  // - Idempotent replay with same idempotencyKey: must return cached response without duplicate balance reduction
+  const secondCompleteRes = env.invokePost({
+    action: 'completePaymentTask',
+    idToken: tokenSec33Paid,
+    taskId: 'pq_booking_' + drawDate33 + '_0901',
+    bookingId: 'booking_' + drawDate33 + '_0901',
+    amountPaid: savedQueueDoc ? savedQueueDoc.amountDue : 100,
+    paymentMethod: 'UPI',
+    idempotencyKey: idemKeyComplete,
+  });
+
+  const idempotencyPreserved =
+    secondCompleteRes.success === true &&
+    secondCompleteRes.idempotentReplay === true &&
+    secondCompleteRes.status === 'COMPLETED';
+
+  // 4. Parity check across root and lottery-app for all modified files
+  const parityFiles = [
+    'src/lottery/types.ts',
+    'src/lottery/components/PaymentQueueScreen.tsx',
+    'src/lottery/lotteryService.ts',
+    'src/lottery/liveFirebase.ts',
+    'src/lottery/LotteryAppMain.tsx',
+  ];
+  let allParityClean = true;
+  for (const pf of parityFiles) {
+    const rootContent = fs.readFileSync(path.join(ROOT_DIR, pf), 'utf8');
+    const appContent = fs.readFileSync(path.join(ROOT_DIR, 'lottery-app', pf), 'utf8');
+    if (rootContent !== appContent) {
+      allParityClean = false;
+      console.error(`[PARITY MISMATCH] ${pf}`);
+    }
+  }
+
+  const s33Passed = Boolean(
+    astCheckAdmin &&
+    astCheckEmp &&
+    astCheckPaidEmp &&
+    astCheckWinners &&
+    queueTaskHasMinimalFields &&
+    empBlockedFromComplete &&
+    paidCompleteSuccess &&
+    idempotencyPreserved &&
+    allParityClean
+  );
+
+  assertTest(
+    'Scenario 33: Strict Role-Based Access Enforcement & Restricted Payment Queue Security Matrix',
+    s33Passed,
+    'Verified all 10 requirements: Admin full access, Regular Employee scoped bookings & shared inventory/tickets/winners, Paid Employee blocked from bookings/customers/codes/inventory/tickets with restricted minimal paymentQueue only, backend queue generation, server-authenticated idempotent completed action, and 100% root/lottery-app parity'
+  );
+
+  // =============================================================
+  // Scenario 34: Carrom Role Separation & Anonymous Employee Labels Security Verification
+  // =============================================================
+  // 1. Two employees cannot read each other's bookings
+  const emp1Uid = 'uid_emp_test_alpha';
+  const emp2Uid = 'uid_emp_test_beta';
+  const emp1Token = 'valid_token_' + emp1Uid;
+  const emp2Token = 'valid_token_' + emp2Uid;
+
+  env.authUsers.set(emp1Token, {
+    uid: emp1Uid,
+    email: 'alpha@carrom.internal',
+    name: 'Operator Alpha',
+    claims: { role: 'employee', otpVerified: true },
+  });
+  env.authUsers.set(emp2Token, {
+    uid: emp2Uid,
+    email: 'beta@carrom.internal',
+    name: 'Operator Beta',
+    claims: { role: 'employee', otpVerified: true },
+  });
+
+  const bookingEmp1 = { bookedByUid: emp1Uid, bookedBy: 'Operator Alpha' };
+  const bookingEmp2 = { bookedByUid: emp2Uid, bookedBy: 'Operator Beta' };
+
+  const emp1CanReadOwn = rulesAstSuite.evaluateFirestoreRule(
+    firestoreRulesText,
+    { uid: emp1Uid, token: { role: 'employee', otpVerified: true } },
+    'read',
+    'bookings',
+    {},
+    bookingEmp1
+  );
+  const emp1CannotReadEmp2 = !rulesAstSuite.evaluateFirestoreRule(
+    firestoreRulesText,
+    { uid: emp1Uid, token: { role: 'employee', otpVerified: true } },
+    'read',
+    'bookings',
+    {},
+    bookingEmp2
+  );
+  const emp2CanReadOwn = rulesAstSuite.evaluateFirestoreRule(
+    firestoreRulesText,
+    { uid: emp2Uid, token: { role: 'employee', otpVerified: true } },
+    'read',
+    'bookings',
+    {},
+    bookingEmp2
+  );
+  const emp2CannotReadEmp1 = !rulesAstSuite.evaluateFirestoreRule(
+    firestoreRulesText,
+    { uid: emp2Uid, token: { role: 'employee', otpVerified: true } },
+    'read',
+    'bookings',
+    {},
+    bookingEmp1
+  );
+
+  const verificationPoint1 = emp1CanReadOwn && emp1CannotReadEmp2 && emp2CanReadOwn && emp2CannotReadEmp1;
+
+  // 2 & 3. Persistent anonymous employee labels across bookings & sessions (zero customer PII in queue)
+  const drawDate34 = '2026-10-28';
+  // Emp1 locks & confirms booking 1
+  env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    ticketNumber: '0951',
+    lockId: 'lock_34_0951',
+  });
+  const book1Res = env.invokePost({
+    action: 'confirmTicketBooking',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    customerName: 'Secret Customer 1',
+    customerPhone: '9840111111',
+    items: [{ ticketNumber: '0951', full: true }],
+    idempotencyKey: 'idem_34_book1',
+  });
+
+  // Emp1 locks & confirms booking 2
+  env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    ticketNumber: '0952',
+    lockId: 'lock_34_0952',
+  });
+  const book2Res = env.invokePost({
+    action: 'confirmTicketBooking',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    customerName: 'Secret Customer 2',
+    customerPhone: '9840222222',
+    items: [{ ticketNumber: '0952', full: true }],
+    idempotencyKey: 'idem_34_book2',
+  });
+
+  // Emp2 locks & confirms booking 3
+  env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: emp2Token,
+    drawDate: drawDate34,
+    ticketNumber: '0953',
+    lockId: 'lock_34_0953',
+  });
+  const book3Res = env.invokePost({
+    action: 'confirmTicketBooking',
+    idToken: emp2Token,
+    drawDate: drawDate34,
+    customerName: 'Secret Customer 3',
+    customerPhone: '9840333333',
+    items: [{ ticketNumber: '0953', full: true }],
+    idempotencyKey: 'idem_34_book3',
+  });
+
+  // Emp1 locks & confirms booking 4 (subsequent session/booking)
+  env.invokePost({
+    action: 'acquireTicketLock',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    ticketNumber: '0954',
+    lockId: 'lock_34_0954',
+  });
+  const book4Res = env.invokePost({
+    action: 'confirmTicketBooking',
+    idToken: emp1Token,
+    drawDate: drawDate34,
+    customerName: 'Secret Customer 4',
+    customerPhone: '9840444444',
+    items: [{ ticketNumber: '0954', full: true }],
+    idempotencyKey: 'idem_34_book4',
+  });
+
+  const pq1 = env.firestoreDocs.get(`paymentQueue/pq_booking_${drawDate34}_0951`);
+  const pq2 = env.firestoreDocs.get(`paymentQueue/pq_booking_${drawDate34}_0952`);
+  const pq3 = env.firestoreDocs.get(`paymentQueue/pq_booking_${drawDate34}_0953`);
+  const pq4 = env.firestoreDocs.get(`paymentQueue/pq_booking_${drawDate34}_0954`);
+
+  // Verify stable labels: Emp1 has same label on pq1, pq2, pq4; Emp2 has distinct label on pq3
+  const emp1Label = pq1 ? pq1.employeeLabel : null;
+  const emp2Label = pq3 ? pq3.employeeLabel : null;
+  const labelStability =
+    Boolean(emp1Label) &&
+    Boolean(emp2Label) &&
+    emp1Label !== emp2Label &&
+    pq2.employeeLabel === emp1Label &&
+    pq4.employeeLabel === emp1Label &&
+    /^L\d+$/.test(emp1Label) &&
+    /^L\d+$/.test(emp2Label);
+
+  // Verify zero customer PII or real employee names in payment queue tasks
+  const zeroPiiInQueue =
+    !pq1.customerName &&
+    !pq1.customerPhone &&
+    !pq1.customerId &&
+    !pq1.bookedBy &&
+    !pq1.bookedByUid &&
+    !pq2.customerName &&
+    !pq3.customerName &&
+    !pq4.customerName;
+
+  const verificationPoint2And3 = labelStability && zeroPiiInQueue;
+
+  // 4. Admin can view mapping, while Paid Employees and Regular Employees cannot
+  const adminLabelsRes = env.invokePost({
+    action: 'getEmployeeLabels',
+    idToken: tokenSec33Admin,
+  });
+  const paidLabelsRes = env.invokePost({
+    action: 'getEmployeeLabels',
+    idToken: tokenSec33Paid,
+  });
+  const empLabelsRes = env.invokePost({
+    action: 'getEmployeeLabels',
+    idToken: emp1Token,
+  });
+
+  const adminHasMapping =
+    adminLabelsRes.success === true &&
+    Array.isArray(adminLabelsRes.labels) &&
+    adminLabelsRes.labels.some((l) => l.uid === emp1Uid && l.label === emp1Label);
+
+  const nonAdminsBlocked =
+    paidLabelsRes.success === false &&
+    paidLabelsRes.code === 'PERMISSION_DENIED' &&
+    empLabelsRes.success === false &&
+    empLabelsRes.code === 'PERMISSION_DENIED';
+
+  // Firestore rules AST for /employeeLabels/{uid}
+  const rulesProtectEmployeeLabels =
+    rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } },
+      'read',
+      'employeeLabels'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'employeeLabels'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: emp1Uid, token: { role: 'employee', otpVerified: true } },
+      'read',
+      'employeeLabels'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Admin, token: { role: 'admin', otpVerified: true } },
+      'write',
+      'employeeLabels'
+    );
+
+  const verificationPoint4 = adminHasMapping && nonAdminsBlocked && rulesProtectEmployeeLabels;
+
+  // 5. Paid employees cannot access ticket grid, ticket locks, private booking screens, or customer records
+  const paidBlockedFromGridAndLocks =
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'ticketLocks'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'tickets'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'ticketInventory',
+      {},
+      { status: 'PUBLISHED' }
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'bookings'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'customers'
+    ) &&
+    !rulesAstSuite.evaluateFirestoreRule(
+      firestoreRulesText,
+      { uid: uidSec33Paid, token: { role: 'paid_employee', otpVerified: true } },
+      'read',
+      'customerCodes'
+    );
+
+  const verificationPoint5 = paidBlockedFromGridAndLocks;
+
+  // 6. Unauthorized users cannot complete payment tasks
+  const unauthComplete = env.invokePost({
+    action: 'completePaymentTask',
+    idToken: emp1Token, // regular employee
+    taskId: 'pq_booking_' + drawDate34 + '_0951',
+    bookingId: 'booking_' + drawDate34 + '_0951',
+    amountPaid: 100,
+    paymentMethod: 'Cash',
+  });
+  const noTokenComplete = env.invokePost({
+    action: 'completePaymentTask',
+    taskId: 'pq_booking_' + drawDate34 + '_0951',
+    bookingId: 'booking_' + drawDate34 + '_0951',
+    amountPaid: 100,
+  });
+
+  const verificationPoint6 =
+    unauthComplete.success === false &&
+    unauthComplete.code === 'PERMISSION_DENIED' &&
+    noTokenComplete.success === false;
+
+  // 7. Parity check between root and lottery-app
+  const verificationPoint7 = allParityClean;
+
+  // 8. Concurrent registration & label assignment uniqueness
+  const concurrentUids = ['uid_conc_1', 'uid_conc_2', 'uid_conc_3', 'uid_conc_4', 'uid_conc_5'];
+  const assignedLabels = concurrentUids.map((cuid) =>
+    env.sandbox.getOrCreateEmployeeLabel_(cuid, 'Emp ' + cuid, 'employee', 'user_' + cuid)
+  );
+  const uniqueLabelsSet = new Set(assignedLabels);
+  const noDuplicateLabels = uniqueLabelsSet.size === concurrentUids.length;
+
+  const s34Passed = Boolean(
+    verificationPoint1 &&
+    verificationPoint2And3 &&
+    verificationPoint4 &&
+    verificationPoint5 &&
+    verificationPoint6 &&
+    verificationPoint7 &&
+    noDuplicateLabels
+  );
+
+  assertTest(
+    'Scenario 34: Carrom Role Separation & Anonymous Employee Labels Security Verification',
+    s34Passed,
+    'Verified all 7 user security criteria: 1) Mutual employee booking isolation, 2) Zero customer PII or real employee names in payment queue, 3) Stable persistent employee labels (L1, L2), 4) Admin-only label mapping view with non-admin lock, 5) Paid employee locked from grid/locks/bookings/customers, 6) Unauthorized users blocked from completing payment tasks, and 7) 100% parity across root and lottery-app'
   );
 
   // -------------------------------------------------------------

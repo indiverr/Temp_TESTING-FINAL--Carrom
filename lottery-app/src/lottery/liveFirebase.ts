@@ -69,6 +69,7 @@ import {
   DEFAULT_WEEKLY_PRESETS,
   DAYS_OF_WEEK,
   DayOfWeek,
+  PaymentQueueTask,
 } from './types';
 import {
   DEFAULT_CONFIG,
@@ -99,6 +100,10 @@ class LiveFirebaseService {
     projectId: '',
     currentUser: null,
   };
+
+  public get currentRole(): LoginType | undefined {
+    return this.status.currentUser?.role;
+  }
 
   /**
    * Estimated (server clock - local clock) offset in ms, derived from `serverNowMs` returned by
@@ -200,6 +205,56 @@ class LiveFirebaseService {
     return { ...this.status };
   }
 
+  /**
+   * Subscribes to real-time auth state changes to preserve session across page reloads.
+   */
+  public subscribeAuthState(
+    callback: (user: FirebaseConnectionStatus['currentUser']) => void
+  ): () => void {
+    const { auth, db } = initFirebase();
+    if (!auth) {
+      callback(this.status.currentUser);
+      return () => {};
+    }
+    return onAuthStateChanged(auth, async (user: User | null) => {
+      if (user) {
+        try {
+          const tokenResult = await user.getIdTokenResult();
+          let role = tokenResult.claims.role as LoginType;
+          let otpVerified = tokenResult.claims.otpVerified === true;
+          let name = user.displayName || (user.email ? user.email.split('@')[0] : 'Operator');
+          if (db && (otpVerified || !role)) {
+            try {
+              const uSnap = await getDoc(doc(db, 'users', user.uid));
+              if (uSnap.exists()) {
+                const uData = uSnap.data();
+                role = (uData?.role as LoginType) || role || 'employee';
+                name = uData?.displayName || uData?.name || name;
+                if (uData?.otpVerified === true && uData?.firstLoginCompleted === true) {
+                  otpVerified = true;
+                }
+              }
+            } catch {}
+          }
+          this.status.currentUser = {
+            uid: user.uid,
+            phone: user.phoneNumber || user.email || '',
+            email: user.email || '',
+            name,
+            role: role || 'employee',
+            otpVerified,
+          };
+          callback(this.status.currentUser);
+        } catch {
+          callback(null);
+        }
+      } else {
+        this.status.currentUser = null;
+        callback(null);
+      }
+    });
+  }
+
   private normalizeFirestoreBooking(raw: any): TicketBooking {
     let history = raw?.history;
     if (typeof history === 'string') {
@@ -240,6 +295,9 @@ class LiveFirebaseService {
     alreadyBooked?: boolean;
     error?: string;
   }> {
+    if (this.currentRole === 'paid_employee') {
+      return { success: false, error: 'Unauthorized: Paid Employees cannot book tickets or acquire locks.' };
+    }
     const cleanTickets = Array.from(
       new Set((ticketNumbers || []).map((t) => String(t).trim().padStart(4, '0')))
     );
@@ -327,6 +385,9 @@ class LiveFirebaseService {
     code?: string;
     error?: string;
   }> {
+    if (this.currentRole === 'paid_employee') {
+      return { success: false, error: 'Unauthorized: Paid Employees cannot book tickets or acquire locks.' };
+    }
     const cleanTickets = Array.from(
       new Set((ticketNumbers || []).map((t) => String(t).trim().padStart(4, '0')))
     );
@@ -401,6 +462,9 @@ class LiveFirebaseService {
     lockId: string,
     lockedByUid: string
   ): Promise<{ success: boolean; releasedCount?: number; error?: string }> {
+    if (this.currentRole === 'paid_employee') {
+      return { success: false, error: 'Unauthorized: Paid Employees cannot book tickets or acquire locks.' };
+    }
     const cleanTickets = Array.from(
       new Set((ticketNumbers || []).map((t) => String(t).trim().padStart(4, '0')))
     );
@@ -455,6 +519,10 @@ class LiveFirebaseService {
     onUpdate: (locks: TicketLock[]) => void,
     onError?: (err: Error) => void
   ): () => void {
+    if (this.currentRole === 'paid_employee') {
+      onUpdate([]);
+      return () => {};
+    }
     const { db } = initFirebase();
     let firestoreLocks: TicketLock[] = [];
 
@@ -1105,6 +1173,10 @@ class LiveFirebaseService {
     role?: LoginType,
     operatorUid?: string
   ): Promise<TicketBooking[]> {
+    // Requirement 3: Paid employees must not read or enumerate /bookings
+    if (role === 'paid_employee') {
+      return [];
+    }
     const { db, auth } = initFirebase();
     const effectiveUid = operatorUid || auth?.currentUser?.uid || this.status.currentUser?.uid || '';
     if (!db) return lotteryService.getBookings(drawDate, role, effectiveUid);
@@ -1150,6 +1222,11 @@ class LiveFirebaseService {
     role?: LoginType,
     operatorUid?: string
   ): () => void {
+    // Requirement 3: Paid employees must not read or enumerate /bookings
+    if (role === 'paid_employee') {
+      onUpdate([]);
+      return () => {};
+    }
     const { db, auth } = initFirebase();
     const effectiveUid = operatorUid || auth?.currentUser?.uid || this.status.currentUser?.uid || '';
     operatorUid = effectiveUid;
@@ -2209,6 +2286,11 @@ class LiveFirebaseService {
     onUpdate: (tickets: TicketInventoryItem[]) => void,
     onError?: (err: Error) => void
   ): () => void {
+    // Requirement 3: Paid employees must not read or enumerate /ticketInventory
+    if (role === 'paid_employee') {
+      onUpdate([]);
+      return () => {};
+    }
     const { db } = initFirebase();
     let firestoreInventory: TicketInventoryItem[] = [];
 
@@ -2672,6 +2754,216 @@ class LiveFirebaseService {
       }
     }
     return localRes;
+  }
+
+  /**
+   * Fetch Restricted Payment Queue (Requirement 4 & 5)
+   */
+  public async fetchPaymentQueueFirestore(
+    drawDate: string,
+    role?: LoginType
+  ): Promise<PaymentQueueTask[]> {
+    if (role === 'employee') {
+      return [];
+    }
+    const { db } = initFirebase();
+    if (!db) {
+      return lotteryService.getPaymentQueue(drawDate);
+    }
+    try {
+      const q = query(collection(db, 'paymentQueue'), where('drawDate', '==', drawDate));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => d.data() as PaymentQueueTask);
+      if (list.length > 0) return list;
+      return lotteryService.getPaymentQueue(drawDate);
+    } catch (e) {
+      console.warn('[Firestore] fetchPaymentQueue error, using local queue:', e);
+      return lotteryService.getPaymentQueue(drawDate);
+    }
+  }
+
+  /**
+   * Subscribe to Restricted Payment Queue in real-time (Requirement 4 & 5)
+   */
+  public subscribePaymentQueueFirestore(
+    drawDate: string,
+    onUpdate: (tasks: PaymentQueueTask[]) => void,
+    onError?: (err: Error) => void,
+    role?: LoginType
+  ): () => void {
+    if (role === 'employee') {
+      onUpdate([]);
+      return () => {};
+    }
+
+    const { db } = initFirebase();
+    let firestoreTasks: PaymentQueueTask[] = [];
+
+    const emitMerged = () => {
+      const localTasks = lotteryService.getPaymentQueue(drawDate);
+      if (firestoreTasks.length === 0) {
+        onUpdate(localTasks);
+        return;
+      }
+      const byId = new Map<string, PaymentQueueTask>();
+      for (const t of localTasks) {
+        byId.set(t.id, t);
+      }
+      for (const t of firestoreTasks) {
+        byId.set(t.id, t);
+      }
+      onUpdate(Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    };
+
+    emitMerged();
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      emitMerged();
+    });
+
+    let unsubFirestore = () => {};
+    if (db) {
+      try {
+        const q = query(collection(db, 'paymentQueue'), where('drawDate', '==', drawDate));
+        unsubFirestore = onSnapshot(
+          q,
+          (snapshot) => {
+            firestoreTasks = snapshot.docs.map((d) => {
+              const data = d.data();
+              return {
+                ...data,
+                employeeLabel: (data.employeeLabel as string) || 'L1',
+              } as PaymentQueueTask;
+            });
+            emitMerged();
+          },
+          (err) => {
+            if (onError && !String(err?.message || '').includes('insufficient permissions')) {
+              onError(err);
+            }
+          }
+        );
+      } catch (err) {}
+    }
+
+    return () => {
+      unsubLocal();
+      unsubFirestore();
+    };
+  }
+
+  /**
+   * Completed Action for Restricted Payment Queue task (Requirement 6)
+   * Authenticated, validated server-side, idempotent.
+   */
+  public async completePaymentTask(
+    taskId: string,
+    bookingId: string,
+    amountPaid?: number,
+    paymentMethod: string = 'Cash',
+    paymentRef: string = '',
+    operator?: { id: string; name: string; role: LoginType }
+  ): Promise<{ success: boolean; taskId?: string; remainingBalance?: number; error?: string }> {
+    const { auth } = initFirebase();
+    const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
+    const idempotencyKey = `idem_pq_${taskId}_${Date.now()}`;
+
+    if (idToken) {
+      try {
+        const serverRes = await this.callOtpAppsScript({
+          action: 'completePaymentTask',
+          idToken,
+          taskId,
+          bookingId,
+          amountPaid,
+          paymentMethod,
+          paymentRef,
+          idempotencyKey,
+        });
+
+        if (serverRes?.success) {
+          lotteryService.completePaymentTask(
+            taskId,
+            bookingId,
+            amountPaid,
+            paymentMethod,
+            paymentRef,
+            operator,
+            { idempotencyKey }
+          );
+          return {
+            success: true,
+            taskId: serverRes.taskId || taskId,
+            remainingBalance: serverRes.remainingBalance ?? 0,
+          };
+        }
+
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+          return { success: false, error: serverRes.error };
+        }
+      } catch (e: any) {
+        console.warn('[Apps Script] completePaymentTask error, fallback to local', e);
+      }
+    }
+
+    const localRes = lotteryService.completePaymentTask(
+      taskId,
+      bookingId,
+      amountPaid,
+      paymentMethod,
+      paymentRef,
+      operator,
+      { idempotencyKey }
+    );
+    return localRes;
+  }
+
+  /**
+   * Subscribes to Admin-only employee label mappings (/employeeLabels)
+   * Returns mapping of { [label]: realEmployeeName }.
+   * Strictly blocked for paid employees and regular employees (returns empty object).
+   */
+  public subscribeEmployeeLabelsFirestore(
+    onUpdate: (labelMap: Record<string, string>) => void
+  ): () => void {
+    if (this.currentRole !== 'admin') {
+      onUpdate({});
+      return () => {};
+    }
+
+    const { db } = initFirebase();
+    let localMap = lotteryService.getEmployeeLabelMap('admin');
+    onUpdate(localMap);
+
+    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+      localMap = lotteryService.getEmployeeLabelMap('admin');
+      onUpdate(localMap);
+    });
+
+    let unsubFirestore = () => {};
+    if (db) {
+      try {
+        const colRef = collection(db, 'employeeLabels');
+        unsubFirestore = onSnapshot(
+          colRef,
+          (snapshot) => {
+            const map: Record<string, string> = { ...localMap };
+            snapshot.docs.forEach((d) => {
+              const data = d.data();
+              if (data.label && data.name) {
+                map[String(data.label)] = String(data.name);
+              }
+            });
+            onUpdate(map);
+          },
+          () => {}
+        );
+      } catch (e) {}
+    }
+
+    return () => {
+      unsubLocal();
+      unsubFirestore();
+    };
   }
 }
 

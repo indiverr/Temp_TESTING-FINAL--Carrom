@@ -67,6 +67,7 @@ export interface TicketBooking {
   bookedByUsername?: string;
   bookedByUid?: string;
   bookedByRole: LoginType;
+  employeeLabel?: string;      // Anonymous label e.g. "L1", "L2", "L3"
   date: string;                // Business date (e.g. "02 Oct 2026")
   bookedAt: string;
   paidAt?: string;
@@ -298,4 +299,32 @@ export interface SystemConfig {
   gpayName: string;
   upiId: string;
   qrCodeUrl: string;
+}
+
+export interface PaymentQueueTask {
+  id: string;
+  bookingId: string;
+  ticketNumber: string;
+  drawDate: string;
+  amountDue: number;
+  totalAmount: number;
+  amountPaid: number;
+  paymentStatus: 'Unpaid' | 'Partial' | 'Paid';
+  status: 'PENDING' | 'COMPLETED';
+  actionRequired: 'CONFIRM_PAYMENT' | 'PARTIAL_PAYMENT';
+  employeeLabel: string; // Anonymous employee label: e.g. "L1", "L2", "L3" (zero employee real names or customer PII)
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  completedBy?: string;
+  completedByUid?: string;
+}
+
+export interface EmployeeLabelMapping {
+  uid: string;
+  label: string;
+  name: string;
+  username?: string;
+  role?: LoginType;
+  assignedAt?: string;
 }

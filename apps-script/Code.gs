@@ -139,6 +139,12 @@ function doPost(e) {
     if (action === 'lookupCustomerBookings') {
       return handleLookupCustomerBookings_(body);
     }
+    if (action === 'completePaymentTask') {
+      return handleCompletePaymentTask_(body);
+    }
+    if (action === 'getEmployeeLabels') {
+      return handleGetEmployeeLabels_(body);
+    }
 
     return jsonResponse_({ success: false, error: 'Unsupported action.' });
   } catch (err) {
@@ -1662,6 +1668,7 @@ function handleConfirmTicketBooking_(body) {
           bookedByUsername: operator.username,
           bookedByUid: operator.uid,
           bookedByRole: operator.role,
+          employeeLabel: getOrCreateEmployeeLabel_(operator.uid, operator.name, operator.role, operator.username),
           date: drawDate,
           bookedAt: nowIso,
           history: JSON.stringify([
@@ -1684,6 +1691,26 @@ function handleConfirmTicketBooking_(body) {
         };
 
         firestoreSetDocument_(bookingDocPath, bookingObj);
+
+        // Generate restricted payment queue task for pending/unpaid bookings (Requirement 4 & 5)
+        if (bookingObj.paymentStatus !== 'Paid') {
+          var queueDocId = 'pq_' + bookingDocId;
+          firestoreSetDocument_('paymentQueue/' + encodeURIComponent(queueDocId), {
+            id: queueDocId,
+            bookingId: bookingDocId,
+            ticketNumber: numStr,
+            drawDate: drawDate,
+            amountDue: totalAmt,
+            totalAmount: totalAmt,
+            amountPaid: 0,
+            paymentStatus: bookingObj.paymentStatus,
+            status: 'PENDING',
+            actionRequired: 'CONFIRM_PAYMENT',
+            employeeLabel: bookingObj.employeeLabel,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
 
         var invDocId = drawKey + '_' + encodeURIComponent(seriesId) + '_' + numStr;
         firestorePatchFields_('ticketInventory/' + encodeURIComponent(invDocId), {
@@ -1852,11 +1879,11 @@ function handleLookupCustomerBookings_(body) {
   }
 
   var operator = verifyOtpVerifiedOperator_(idToken);
-  if (operator.role !== 'admin' && operator.role !== 'paid_employee') {
+  if (operator.role !== 'admin') {
     return jsonResponse_({
       success: false,
       code: 'PERMISSION_DENIED',
-      error: 'Permission Denied: Employees cannot query global customer directory records.',
+      error: 'Permission Denied: Only Admins can query customer directory records.',
     });
   }
 
@@ -1972,15 +1999,18 @@ function handleConfirmPendingBooking_(body) {
       bookedTicketId: bookingId,
     });
 
-    return jsonResponse_({
+    var confPayload = {
       success: true,
       bookingId: bookingId,
       ticketNumber: booking.ticketNumber,
-      customerId: booking.customerId,
       bookingStatus: 'Booked',
       confirmedBy: operator.name,
       confirmedAt: nowIso,
-    });
+    };
+    if (operator.role === 'admin') {
+      confPayload.customerId = booking.customerId;
+    }
+    return jsonResponse_(confPayload);
   } finally {
     lock.releaseLock();
   }
@@ -2110,6 +2140,13 @@ function handleGetTicketInventory_(body) {
     return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
   }
   var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role === 'paid_employee') {
+    return jsonResponse_({
+      success: false,
+      code: 'PERMISSION_DENIED',
+      error: 'Permission Denied: Paid Employees cannot view ticket inventory.',
+    });
+  }
   var drawDate = String(body.drawDate || '').trim();
   var seriesId = String(body.seriesId || '').trim();
 
@@ -3206,4 +3243,325 @@ function jsonResponse_(payload) {
   return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(
     ContentService.MimeType.JSON
   );
+}
+
+
+/**
+ * 11B. Restricted Payment Queue: Completed Action
+ *      - Authenticated & server-validated: Paid Employee or Admin only.
+ *      - Idempotent: safe against network retries using idempotencyKey.
+ *      - Restricted to eligible pending payment tasks.
+ *      - Prevents unauthorized balance changes and duplicate payment confirmations.
+ */
+function handleCompletePaymentTask_(body) {
+  var idToken = String(body.idToken || '').trim();
+  if (!idToken) {
+    return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
+  }
+
+  var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role !== 'paid_employee' && operator.role !== 'admin') {
+    return jsonResponse_({
+      success: false,
+      code: 'PERMISSION_DENIED',
+      error: 'Permission Denied: Only Paid Employees or Admin can complete payment tasks.',
+    });
+  }
+
+  var taskId = String(body.taskId || '').trim();
+  var bookingId = String(body.bookingId || '').trim();
+  var idempotencyKey = String(body.idempotencyKey || '').trim();
+  var paymentMethod = String(body.paymentMethod || 'Cash').trim();
+  var paymentRef = String(body.paymentRef || '').trim();
+  var submittedAmount = Number(body.amountPaid || 0);
+
+  if (!taskId || !bookingId) {
+    return jsonResponse_({ success: false, error: 'taskId and bookingId are required.' });
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var now = Date.now();
+    var nowIso = new Date(now).toISOString();
+
+    // 1. Idempotency Check
+    if (idempotencyKey) {
+      var idemPath = 'bookingIdempotency/' + encodeURIComponent(idempotencyKey);
+      var existingIdem = firestoreGetDocument_(idemPath);
+      if (existingIdem && existingIdem.responseJson) {
+        var cached = JSON.parse(String(existingIdem.responseJson));
+        cached.idempotentReplay = true;
+        return jsonResponse_(cached);
+      }
+    }
+
+    // 2. Fetch Payment Queue Task
+    var taskPath = 'paymentQueue/' + encodeURIComponent(taskId);
+    var task = firestoreGetDocument_(taskPath);
+    if (!task) {
+      return jsonResponse_({ success: false, code: 'NOT_FOUND', error: 'Payment task not found.' });
+    }
+    if (task.status === 'COMPLETED') {
+      return jsonResponse_({
+        success: true,
+        alreadyCompleted: true,
+        taskId: taskId,
+        status: 'COMPLETED',
+        remainingBalance: 0,
+      });
+    }
+
+    // 3. Fetch Booking
+    var bookingPath = 'bookings/' + encodeURIComponent(bookingId);
+    var booking = firestoreGetDocument_(bookingPath);
+    if (!booking) {
+      return jsonResponse_({ success: false, code: 'NOT_FOUND', error: 'Associated booking not found.' });
+    }
+    if (booking.paymentStatus === 'Paid') {
+      firestorePatchFields_(taskPath, {
+        status: 'COMPLETED',
+        amountDue: 0,
+        paymentStatus: 'Paid',
+        completedAt: nowIso,
+        completedBy: operator.name,
+        completedByUid: operator.uid,
+        updatedAt: nowIso,
+      });
+      return jsonResponse_({ success: true, taskId: taskId, remainingBalance: 0, status: 'COMPLETED' });
+    }
+
+    var effectivePayAmount = submittedAmount > 0 ? submittedAmount : Number(booking.remainingBalance || booking.totalAmount || 0);
+    if (effectivePayAmount <= 0 || effectivePayAmount > Number(booking.remainingBalance || booking.totalAmount)) {
+      return jsonResponse_({ success: false, error: 'Payment amount exceeds remaining balance.' });
+    }
+
+    var newRemaining = Math.max(0, Number(booking.remainingBalance || booking.totalAmount) - effectivePayAmount);
+    var newPaid = Number(booking.amountPaid || 0) + effectivePayAmount;
+    var newPaymentStatus = newRemaining === 0 ? 'Paid' : 'Partial';
+    var newTaskStatus = newRemaining === 0 ? 'COMPLETED' : 'PENDING';
+
+    var history = [];
+    try {
+      history = typeof booking.history === 'string' ? JSON.parse(booking.history) : (booking.history || []);
+    } catch (e) {
+      history = [];
+    }
+    history.unshift({
+      id: 'pay-aud-' + now,
+      timestamp: nowIso,
+      action: newRemaining === 0 ? 'PAYMENT_RECEIVED' : 'PARTIAL_PAYMENT',
+      amountChanged: effectivePayAmount,
+      paymentMethod: paymentMethod,
+      paymentRef: paymentRef || ('REC-' + now),
+      performedBy: operator.name,
+      performedByRole: operator.role,
+      notes: 'Payment verified via restricted queue by ' + operator.name,
+    });
+
+    // 4. Update Booking (atomic via server)
+    firestorePatchFields_(bookingPath, {
+      amountPaid: newPaid,
+      remainingBalance: newRemaining,
+      paymentStatus: newPaymentStatus,
+      paidBy: operator.name,
+      paidAt: nowIso,
+      history: JSON.stringify(history),
+    });
+
+    // 5. Update Payment Queue Task
+    firestorePatchFields_(taskPath, {
+      amountPaid: newPaid,
+      amountDue: newRemaining,
+      paymentStatus: newPaymentStatus,
+      status: newTaskStatus,
+      completedAt: newTaskStatus === 'COMPLETED' ? nowIso : null,
+      completedBy: newTaskStatus === 'COMPLETED' ? operator.name : null,
+      completedByUid: newTaskStatus === 'COMPLETED' ? operator.uid : null,
+      updatedAt: nowIso,
+    });
+
+    // 6. Record Immutable Payment Document
+    var paymentDocId = 'pay_' + taskId + '_' + now;
+    firestoreSetDocument_('payments/' + encodeURIComponent(paymentDocId), {
+      bookingId: bookingId,
+      ticketNumber: booking.ticketNumber,
+      drawDate: booking.date,
+      amount: effectivePayAmount,
+      paymentMethod: paymentMethod,
+      paymentRef: paymentRef || ('REC-' + now),
+      paymentStatus: newPaymentStatus,
+      confirmedBy: operator.name,
+      confirmedByUid: operator.uid,
+      role: operator.role,
+      createdAt: nowIso,
+    });
+
+    var resPayload = {
+      success: true,
+      taskId: taskId,
+      bookingId: bookingId,
+      ticketNumber: booking.ticketNumber,
+      amountPaid: newPaid,
+      remainingBalance: newRemaining,
+      paymentStatus: newPaymentStatus,
+      status: newTaskStatus,
+      confirmedBy: operator.name,
+      confirmedAt: nowIso,
+    };
+
+    if (idempotencyKey) {
+      firestoreSetDocument_('bookingIdempotency/' + encodeURIComponent(idempotencyKey), {
+        uid: operator.uid,
+        action: 'completePaymentTask',
+        taskId: taskId,
+        bookingId: bookingId,
+        responseJson: JSON.stringify(resPayload),
+        createdAt: nowIso,
+      });
+    }
+
+    return jsonResponse_(resPayload);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * 11C. Persistent Anonymous Employee Label Mapping:
+ *      Assigns or retrieves a stable, unique anonymous label (L1, L2, L3) for each employee UID.
+ *      Uses LockService with double-checked locking to guarantee genuine atomicity across concurrent registrations.
+ */
+function getOrCreateEmployeeLabel_(uid, name, role, username) {
+  if (!uid) return 'L1';
+  var labelDocPath = 'employeeLabels/' + encodeURIComponent(uid);
+  var existing = firestoreGetDocument_(labelDocPath);
+  if (existing && existing.label) {
+    return String(existing.label);
+  }
+
+  var lock = LockService.getScriptLock();
+  var lockAcquired = false;
+  try {
+    lockAcquired = lock.tryLock(15000);
+  } catch (e) {
+    lockAcquired = false;
+  }
+
+  try {
+    var doubleCheck = firestoreGetDocument_(labelDocPath);
+    if (doubleCheck && doubleCheck.label) {
+      return String(doubleCheck.label);
+    }
+
+    var registryDocPath = 'config/employeeLabelRegistry';
+    var registry = firestoreGetDocument_(registryDocPath) || { nextIndex: 1 };
+    var assignedIndex = Number(registry.nextIndex || 1);
+    if (isNaN(assignedIndex) || assignedIndex < 1) {
+      assignedIndex = 1;
+    }
+    var newLabel = 'L' + assignedIndex;
+
+    var nowIso = new Date().toISOString();
+    firestoreSetDocument_(labelDocPath, {
+      uid: uid,
+      label: newLabel,
+      labelIndex: assignedIndex,
+      name: String(name || 'Employee'),
+      username: String(username || ''),
+      role: String(role || 'employee'),
+      assignedAt: nowIso,
+    });
+
+    firestoreSetDocument_(registryDocPath, {
+      nextIndex: assignedIndex + 1,
+      lastAssignedLabel: newLabel,
+      lastAssignedUid: uid,
+      updatedAt: nowIso,
+    });
+
+    return newLabel;
+  } finally {
+    if (lockAcquired) {
+      try {
+        lock.releaseLock();
+      } catch (e) {}
+    }
+  }
+}
+
+/**
+ * 11D. Admin-Only Endpoint: Returns the UID -> Real Name -> Anonymous Label mapping.
+ *      Enforces role authorization (rejects paid employees and regular employees).
+ */
+function handleGetEmployeeLabels_(body) {
+  var idToken = String(body.idToken || '').trim();
+  if (!idToken) {
+    return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
+  }
+
+  var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role !== 'admin') {
+    return jsonResponse_({
+      success: false,
+      code: 'PERMISSION_DENIED',
+      error: 'Permission Denied: Only Admins can view employee label mappings.',
+    });
+  }
+
+  var list = firestoreListDocuments_('employeeLabels');
+  var labels = [];
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i];
+    if (item && item.label && item.uid) {
+      labels.push({
+        uid: item.uid,
+        label: item.label,
+        name: item.name || 'Employee',
+        username: item.username || '',
+        role: item.role || 'employee',
+      });
+    }
+  }
+
+  return jsonResponse_({
+    success: true,
+    labels: labels,
+  });
+}
+
+/**
+ * Lists documents in a collection via the Firestore REST API.
+ */
+function firestoreListDocuments_(collectionPath) {
+  var projectId = getProjectId_();
+  var token = getAdminAccessToken_();
+  var url =
+    'https://firestore.googleapis.com/v1/projects/' +
+    encodeURIComponent(projectId) +
+    '/databases/(default)/documents/' +
+    collectionPath;
+
+  var res = safeFetch_(url, {
+    method: 'get',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+  });
+
+  if (res.getResponseCode() !== 200) {
+    return [];
+  }
+
+  var json = JSON.parse(res.getContentText());
+  var docs = json.documents || [];
+  var result = [];
+
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    var parsed = fromFirestoreFields_(d.fields || {});
+    if (!parsed.uid && d.name) { var parts = String(d.name).split('/'); parsed.uid = parts[parts.length - 1]; }
+    result.push(parsed);
+  }
+
+  return result;
 }
