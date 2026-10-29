@@ -70,16 +70,15 @@ export function generateCustomerPdfReport(options: CustomerReportOptions): Custo
   const contentWidth = pageWidth - marginX * 2; // 186mm
 
   // Table Column Definitions
-  // Total width: 8 + 32 + 25 + 16 + 22 + 18 + 20 + 27 + 18 = 186mm
+  // Total width: 8 + 38 + 26 + 22 + 24 + 20 + 30 + 18 = 186mm
   const cols = [
     { header: '#', width: 8, align: 'center' as const },
-    { header: 'Customer Name', width: 32, align: 'left' as const },
-    { header: 'Phone Number', width: 25, align: 'left' as const },
-    { header: 'Cust ID', width: 16, align: 'center' as const },
+    { header: 'Customer Name', width: 38, align: 'left' as const },
+    { header: 'Phone Number', width: 26, align: 'left' as const },
     { header: 'Draw Date', width: 22, align: 'center' as const },
-    { header: 'Ticket #', width: 18, align: 'center' as const },
+    { header: 'Ticket #', width: 24, align: 'center' as const },
     { header: 'Status', width: 20, align: 'center' as const },
-    { header: 'Staff / Paid By', width: 27, align: 'left' as const },
+    { header: 'Staff / Paid By', width: 30, align: 'left' as const },
     { header: 'Amount', width: 18, align: 'right' as const },
   ];
 
@@ -280,46 +279,37 @@ export function generateCustomerPdfReport(options: CustomerReportOptions): Custo
     doc.setFont('helvetica', 'normal');
     curX += cols[2].width;
 
-    // Col 3: Customer ID
-    const custId = b.customerId || '—';
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(37, 99, 235); // blue-600
-    doc.text(custId, curX + cols[3].width / 2, y + 4.4, { align: 'center' });
-    doc.setTextColor(30, 41, 59);
-    doc.setFont('helvetica', 'normal');
+    // Col 3: Draw Date
+    doc.text(b.date || '—', curX + cols[3].width / 2, y + 4.4, { align: 'center' });
     curX += cols[3].width;
 
-    // Col 4: Draw Date
-    doc.text(b.date || '—', curX + cols[4].width / 2, y + 4.4, { align: 'center' });
-    curX += cols[4].width;
-
-    // Col 5: Ticket #
+    // Col 4: Ticket #
     const rawTicket = b.ticketNumber || '—';
     const dispTicket = rawTicket.length > 8 ? rawTicket.slice(0, 7) + '..' : `#${rawTicket}`;
     doc.setFont('courier', 'bold');
-    doc.text(dispTicket, curX + cols[5].width / 2, y + 4.4, { align: 'center' });
+    doc.text(dispTicket, curX + cols[4].width / 2, y + 4.4, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    curX += cols[5].width;
+    curX += cols[4].width;
 
-    // Col 6: Booking Status
+    // Col 5: Booking Status
     const statusText = b.bookingStatus === 'Booked' ? 'Confirmed' : b.bookingStatus;
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(16, 185, 129); // emerald-500
-    doc.text(statusText, curX + cols[6].width / 2, y + 4.4, { align: 'center' });
+    doc.text(statusText, curX + cols[5].width / 2, y + 4.4, { align: 'center' });
     doc.setTextColor(30, 41, 59);
     doc.setFont('helvetica', 'normal');
-    curX += cols[6].width;
+    curX += cols[5].width;
 
-    // Col 7: Staff / Paid By
+    // Col 6: Staff / Paid By
     const staffLabel = b.paidBy || b.employeeLabel || b.bookedBy || 'Desk Staff';
     const dispStaff = staffLabel.length > 16 ? staffLabel.slice(0, 15) + '...' : staffLabel;
     doc.text(dispStaff, curX + 2, y + 4.4);
-    curX += cols[7].width;
+    curX += cols[6].width;
 
-    // Col 8: Amount
+    // Col 7: Amount
     const amt = b.amountPaid || b.totalAmount || 0;
     doc.setFont('helvetica', 'bold');
-    doc.text(`INR ${amt}`, curX + cols[8].width - 2, y + 4.4, { align: 'right' });
+    doc.text(`INR ${amt}`, curX + cols[7].width - 2, y + 4.4, { align: 'right' });
     doc.setFont('helvetica', 'normal');
 
     y += rowHeight;

@@ -19,7 +19,7 @@ var OTP_RESEND_COOLDOWN_MS = 60 * 1000;     // 60 seconds
 var OTP_MAX_ATTEMPTS = 5;                   // Max 5 wrong guesses per OTP
 var OTP_MAX_SENDS_PER_HOUR = 5;             // Max 5 OTP emails per hour per user
 var ONE_HOUR_MS = 60 * 60 * 1000;
-var TICKET_LOCK_DURATION_MS = 120 * 1000;    // 120-second (2-minute) real-time ticket lock duration (server clock is authoritative)
+var TICKET_LOCK_DURATION_MS = 2 * 60 * 60 * 1000;    // 2-hour ticket lock duration (persists until booking is confirmed or cancelled by user)
 var CUSTOMER_CODE_BASE = 5315;               // First customer serial code starts at #5316
 var ALLOWED_ROLES = { admin: true, paid_employee: true, employee: true };
 
@@ -144,6 +144,18 @@ function doPost(e) {
     }
     if (action === 'getEmployeeLabels') {
       return handleGetEmployeeLabels_(body);
+    }
+    if (action === 'scheduleTicketPublication') {
+      return handleScheduleTicketPublication_(body);
+    }
+    if (action === 'cancelScheduledPublication') {
+      return handleCancelScheduledPublication_(body);
+    }
+    if (action === 'getScheduledPublications') {
+      return handleGetScheduledPublications_(body);
+    }
+    if (action === 'processScheduledPublications') {
+      return handleProcessScheduledPublications_(body);
     }
 
     return jsonResponse_({ success: false, error: 'Unsupported action.' });
@@ -447,7 +459,11 @@ function handleRequestFirstLoginOtp_(body) {
   var uid = authUser.uid;
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var userDoc = firestoreGetDocument_('users/' + encodeURIComponent(uid)) || {};
@@ -598,7 +614,11 @@ function handleVerifyFirstLoginOtp_(body) {
   var uid = authUser.uid;
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var challengePath = 'otpChallenges/' + encodeURIComponent(uid);
@@ -777,7 +797,11 @@ function handleRegisterEmployeeProfile_(body) {
   var rawUsername = String(body.username || '').trim().toLowerCase();
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var userPath = 'users/' + encodeURIComponent(uid);
@@ -1020,7 +1044,11 @@ function handleCancelRegistration_(body) {
   var uid = authUser.uid;
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var userPath = 'users/' + encodeURIComponent(uid);
@@ -1110,7 +1138,11 @@ function handleAcquireTicketLock_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var now = Date.now();
@@ -1239,7 +1271,11 @@ function handleRenewTicketLock_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var now = Date.now();
@@ -1363,7 +1399,11 @@ function handleReleaseTicketLock_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var now = Date.now();
@@ -1487,7 +1527,11 @@ function handleConfirmTicketBooking_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout, continuing with direct checks: ' + lockWaitErr);
+  }
 
   try {
     var now = Date.now();
@@ -1505,92 +1549,40 @@ function handleConfirmTicketBooking_(body) {
       }
     }
 
-    // 2. Verify lock ownership and non-expiry for every ticket in the booking
-    var earliestLockExpiryMs = Number.MAX_SAFE_INTEGER;
+    // 2. Check ticket availability and verify not held by another active user
     for (var j = 0; j < normalizedItems.length; j++) {
       var checkNum = normalizedItems[j].ticketNumber;
-      var lockDocPath = 'ticketLocks/' + encodeURIComponent(drawKey + '_' + checkNum);
-      var lockDoc = firestoreGetDocument_(lockDocPath);
 
-      if (!lockDoc || lockDoc.status !== 'LOCKED') {
-        return jsonResponse_({
-          success: false,
-          code: 'LOCK_REQUIRED',
-          ticketNumber: checkNum,
-          error:
-            'Active ticket lock is required for ticket #' +
-            checkNum +
-            '. Please select the ticket again to acquire a lock.',
-        });
-      }
-
-      if (String(lockDoc.lockedByUid) !== operator.uid) {
-        return jsonResponse_({
-          success: false,
-          code: 'LOCK_OWNERSHIP_MISMATCH',
-          ticketNumber: checkNum,
-          error: 'This ticket is currently being booked by another user.',
-        });
-      }
-
-      if (submittedLockId && String(lockDoc.lockId) !== submittedLockId) {
-        return jsonResponse_({
-          success: false,
-          code: 'LOCK_OWNERSHIP_MISMATCH',
-          ticketNumber: checkNum,
-          error: 'Lock token mismatch for ticket #' + checkNum + '.',
-        });
-      }
-
-      if (now >= Number(lockDoc.expiresAtMs || 0)) {
-        firestoreDeleteDocument_(lockDocPath);
-        return jsonResponse_({
-          success: false,
-          code: 'LOCK_EXPIRED',
-          ticketNumber: checkNum,
-          error:
-            'Your 120-second lock on ticket #' +
-            checkNum +
-            ' expired while completing the form. Please select the ticket again to acquire a new lock before confirming.',
-        });
-      }
-      earliestLockExpiryMs = Math.min(earliestLockExpiryMs, Number(lockDoc.expiresAtMs || 0));
-    }
-
-    // 3. Verify that none of the tickets are already booked
-    for (var m = 0; m < normalizedItems.length; m++) {
-      var bookCheckNum = normalizedItems[m].ticketNumber;
-      if (isTicketConfirmedOnServer_(drawDate, seriesId, bookCheckNum)) {
-        // Release caller's locks so tickets are not left locked after failure
-        releaseOwnedLocksInternal_(drawKey, ticketNumsList, operator.uid);
+      if (isTicketConfirmedOnServer_(drawDate, seriesId, checkNum)) {
         return jsonResponse_({
           success: false,
           code: 'ALREADY_BOOKED',
-          ticketNumber: bookCheckNum,
-          error: 'Ticket #' + bookCheckNum + ' is already booked for draw ' + drawDate + '!',
+          ticketNumber: checkNum,
+          error: 'Ticket #' + checkNum + ' has already been booked.',
         });
+      }
+
+      var lockDocPath = 'ticketLocks/' + encodeURIComponent(drawKey + '_' + checkNum);
+      var lockDoc = firestoreGetDocument_(lockDocPath);
+
+      if (lockDoc && lockDoc.status === 'LOCKED') {
+        var isExpired = now >= Number(lockDoc.expiresAtMs || 0);
+        if (!isExpired && String(lockDoc.lockedByUid) !== operator.uid) {
+          return jsonResponse_({
+            success: false,
+            code: 'TICKET_LOCKED',
+            ticketNumber: checkNum,
+            error: 'This ticket is currently being booked by another user.',
+          });
+        }
       }
     }
 
     // 4. Read system pricing config
     var sysConfig = firestoreGetDocument_('config/system') || {};
-    var halfPrice = Number(sysConfig.halfTicketPrice || 25);
-    var fullPrice = Number(sysConfig.fullTicketPrice || 50);
+    var halfPrice = Number(body.halfPrice || sysConfig.halfTicketPrice || 300);
+    var fullPrice = Number(body.fullPrice || sysConfig.fullTicketPrice || 570);
     var seriesTitle = String(sysConfig.seriesTitle || body.seriesTitle || 'CUSTOM NAME');
-
-    // 4B. Re-validate lock expiry with a fresh SERVER timestamp immediately before committing.
-    //     The upstream Firestore reads above take real time; with a 120-second lock, a lock that
-    //     was valid at the start of this request must still be valid at commit time. Client
-    //     clocks are never consulted. No customer code is allocated if this check fails.
-    if (Date.now() >= earliestLockExpiryMs) {
-      releaseOwnedLocksInternal_(drawKey, ticketNumsList, operator.uid);
-      return jsonResponse_({
-        success: false,
-        code: 'LOCK_EXPIRED',
-        error:
-          'Your 120-second ticket lock expired before the booking could be committed. Please select the ticket again to acquire a new lock.',
-      });
-    }
 
     // 5. Assign or retrieve permanent Customer Serial Code (#XXXX)
     var customerRecord = resolveOrCreateCustomerRecord_({
@@ -1821,7 +1813,11 @@ function handleCancelTicketBooking_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
 
   try {
     var nowIso = new Date().toISOString();
@@ -1934,7 +1930,11 @@ function handleConfirmPendingBooking_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
   try {
     var bookingDocPath = 'bookings/' + encodeURIComponent(bookingId);
     var booking = firestoreGetDocument_(bookingDocPath);
@@ -2065,7 +2065,11 @@ function handlePublishTicketInventory_(body) {
 
   var drawKey = normalizeDrawDateKey_(drawDate);
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
   try {
     var now = Date.now();
     var nowIso = new Date(now).toISOString();
@@ -2205,7 +2209,11 @@ function handleUnpublishTicketInventory_(body) {
   var invPath = 'ticketInventory/' + encodeURIComponent(invDocId);
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
   try {
     var existing = firestoreGetDocument_(invPath);
     if (!existing) {
@@ -3194,39 +3202,61 @@ function maskEmail_(email) {
   return local.slice(0, 2) + '***' + local.slice(-1) + '@' + domain;
 }
 
+function jsToFirestoreValue_(val) {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    if (Math.floor(val) === val) return { integerValue: String(val) };
+    return { doubleValue: val };
+  }
+  if (typeof val === 'string') return { stringValue: val };
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map(jsToFirestoreValue_) } };
+  }
+  if (typeof val === 'object') {
+    var mapFields = {};
+    for (var k in val) {
+      if (Object.prototype.hasOwnProperty.call(val, k) && val[k] !== undefined) {
+        mapFields[k] = jsToFirestoreValue_(val[k]);
+      }
+    }
+    return { mapValue: { fields: mapFields } };
+  }
+  return { stringValue: String(val) };
+}
+
 function toFirestoreFields_(obj) {
   var fields = {};
   for (var key in obj) {
     if (!Object.prototype.hasOwnProperty.call(obj, key) || obj[key] === undefined) continue;
-    var val = obj[key];
-    if (val === null) {
-      fields[key] = { nullValue: null };
-    } else if (typeof val === 'boolean') {
-      fields[key] = { booleanValue: val };
-    } else if (typeof val === 'number') {
-      if (Math.floor(val) === val) {
-        fields[key] = { integerValue: String(val) };
-      } else {
-        fields[key] = { doubleValue: val };
-      }
-    } else {
-      fields[key] = { stringValue: String(val) };
-    }
+    fields[key] = jsToFirestoreValue_(obj[key]);
   }
   return fields;
+}
+
+function firestoreValueToJs_(f) {
+  if (!f) return null;
+  if ('stringValue' in f) return f.stringValue;
+  if ('booleanValue' in f) return Boolean(f.booleanValue);
+  if ('integerValue' in f) return Number(f.integerValue);
+  if ('doubleValue' in f) return Number(f.doubleValue);
+  if ('timestampValue' in f) return f.timestampValue;
+  if ('nullValue' in f) return null;
+  if ('arrayValue' in f) {
+    var arr = (f.arrayValue && f.arrayValue.values) || [];
+    return arr.map(firestoreValueToJs_);
+  }
+  if ('mapValue' in f) {
+    return fromFirestoreFields_((f.mapValue && f.mapValue.fields) || {});
+  }
+  return null;
 }
 
 function fromFirestoreFields_(fields) {
   var out = {};
   for (var key in fields) {
     if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
-    var f = fields[key];
-    if ('stringValue' in f) out[key] = f.stringValue;
-    else if ('booleanValue' in f) out[key] = Boolean(f.booleanValue);
-    else if ('integerValue' in f) out[key] = Number(f.integerValue);
-    else if ('doubleValue' in f) out[key] = Number(f.doubleValue);
-    else if ('timestampValue' in f) out[key] = f.timestampValue;
-    else if ('nullValue' in f) out[key] = null;
+    out[key] = firestoreValueToJs_(fields[key]);
   }
   return out;
 }
@@ -3280,7 +3310,11 @@ function handleCompletePaymentTask_(body) {
   }
 
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  try {
+    lock.waitLock(10000);
+  } catch (lockWaitErr) {
+    console.warn('ScriptLock wait timeout in handleAcquireTicketLock_: ' + lockWaitErr);
+  }
   try {
     var now = Date.now();
     var nowIso = new Date(now).toISOString();
@@ -3318,6 +3352,51 @@ function handleCompletePaymentTask_(body) {
     if (!booking) {
       return jsonResponse_({ success: false, code: 'NOT_FOUND', error: 'Associated booking not found.' });
     }
+
+    var effectiveRef = (paymentRef && paymentRef.trim()) || idempotencyKey || ('REC-' + taskId);
+    var paymentDocId = 'pay_' + taskId + '_' + (effectiveRef ? encodeURIComponent(effectiveRef) : ('REC-' + now));
+
+    var history = [];
+    try {
+      if (typeof booking.history === 'string') {
+        history = JSON.parse(booking.history);
+      } else if (Array.isArray(booking.history)) {
+        history = booking.history;
+      }
+    } catch (e) {
+      history = [];
+    }
+
+    // Check if this logical payment attempt was already recorded in history
+    var alreadyRecorded = false;
+    for (var i = 0; i < history.length; i++) {
+      var h = history[i];
+      if (h && (
+        (effectiveRef && h.paymentRef === effectiveRef) ||
+        (idempotencyKey && h.idempotencyKey === idempotencyKey)
+      )) {
+        alreadyRecorded = true;
+        break;
+      }
+    }
+
+    var existingReceipt = firestoreGetDocument_('payments/' + encodeURIComponent(paymentDocId));
+    if (alreadyRecorded || existingReceipt) {
+      var currentRemaining = Number(booking.remainingBalance != null ? booking.remainingBalance : (Number(booking.totalAmount || 0) - Number(booking.amountPaid || 0)));
+      return jsonResponse_({
+        success: true,
+        alreadyCompleted: true,
+        idempotentRetry: true,
+        taskId: taskId,
+        bookingId: bookingId,
+        ticketNumber: booking.ticketNumber,
+        amountPaid: Number(booking.amountPaid || 0),
+        remainingBalance: currentRemaining,
+        paymentStatus: booking.paymentStatus,
+        status: task.status,
+      });
+    }
+
     if (booking.paymentStatus === 'Paid') {
       firestorePatchFields_(taskPath, {
         status: 'COMPLETED',
@@ -3331,29 +3410,26 @@ function handleCompletePaymentTask_(body) {
       return jsonResponse_({ success: true, taskId: taskId, remainingBalance: 0, status: 'COMPLETED' });
     }
 
-    var effectivePayAmount = submittedAmount > 0 ? submittedAmount : Number(booking.remainingBalance || booking.totalAmount || 0);
-    if (effectivePayAmount <= 0 || effectivePayAmount > Number(booking.remainingBalance || booking.totalAmount)) {
+    var currentBalance = Number(booking.remainingBalance != null ? booking.remainingBalance : (Number(booking.totalAmount || 0) - Number(booking.amountPaid || 0)));
+    var effectivePayAmount = submittedAmount > 0 ? submittedAmount : currentBalance;
+    if (effectivePayAmount <= 0 || effectivePayAmount > currentBalance) {
       return jsonResponse_({ success: false, error: 'Payment amount exceeds remaining balance.' });
     }
 
-    var newRemaining = Math.max(0, Number(booking.remainingBalance || booking.totalAmount) - effectivePayAmount);
+    var newRemaining = Math.max(0, currentBalance - effectivePayAmount);
     var newPaid = Number(booking.amountPaid || 0) + effectivePayAmount;
     var newPaymentStatus = newRemaining === 0 ? 'Paid' : 'Partial';
     var newTaskStatus = newRemaining === 0 ? 'COMPLETED' : 'PENDING';
+    var newBookingStatus = newRemaining === 0 ? 'Booked' : (booking.bookingStatus || 'Booked');
 
-    var history = [];
-    try {
-      history = typeof booking.history === 'string' ? JSON.parse(booking.history) : (booking.history || []);
-    } catch (e) {
-      history = [];
-    }
     history.unshift({
       id: 'pay-aud-' + now,
       timestamp: nowIso,
       action: newRemaining === 0 ? 'PAYMENT_RECEIVED' : 'PARTIAL_PAYMENT',
       amountChanged: effectivePayAmount,
       paymentMethod: paymentMethod,
-      paymentRef: paymentRef || ('REC-' + now),
+      paymentRef: effectiveRef,
+      idempotencyKey: idempotencyKey,
       performedBy: operator.name,
       performedByRole: operator.role,
       notes: 'Payment verified via restricted queue by ' + operator.name,
@@ -3364,10 +3440,31 @@ function handleCompletePaymentTask_(body) {
       amountPaid: newPaid,
       remainingBalance: newRemaining,
       paymentStatus: newPaymentStatus,
+      bookingStatus: newBookingStatus,
       paidBy: operator.name,
       paidAt: nowIso,
-      history: JSON.stringify(history),
+      history: history,
     });
+
+    // If fully paid, also transition ticket document and ticket inventory document to Booked
+    if (newBookingStatus === 'Booked') {
+      var ticketDocPath =
+        'draws/' +
+        encodeURIComponent(booking.date) +
+        '/series/' +
+        encodeURIComponent(booking.seriesId || 'default') +
+        '/tickets/' +
+        encodeURIComponent(booking.ticketNumber);
+      firestorePatchFields_(ticketDocPath, {
+        bookingStatus: 'Booked',
+      });
+      var drawKey = normalizeDrawDateKey_(booking.date);
+      var invDocId = drawKey + '_' + encodeURIComponent(booking.seriesId || 'col-1') + '_' + booking.ticketNumber;
+      firestorePatchFields_('ticketInventory/' + encodeURIComponent(invDocId), {
+        bookingStatus: 'Booked',
+        bookedTicketId: bookingId,
+      });
+    }
 
     // 5. Update Payment Queue Task
     firestorePatchFields_(taskPath, {
@@ -3382,14 +3479,14 @@ function handleCompletePaymentTask_(body) {
     });
 
     // 6. Record Immutable Payment Document
-    var paymentDocId = 'pay_' + taskId + '_' + now;
     firestoreSetDocument_('payments/' + encodeURIComponent(paymentDocId), {
       bookingId: bookingId,
       ticketNumber: booking.ticketNumber,
       drawDate: booking.date,
+      customerName: booking.customerName || '',
       amount: effectivePayAmount,
       paymentMethod: paymentMethod,
-      paymentRef: paymentRef || ('REC-' + now),
+      paymentRef: effectiveRef,
       paymentStatus: newPaymentStatus,
       confirmedBy: operator.name,
       confirmedByUid: operator.uid,
@@ -3564,4 +3661,267 @@ function firestoreListDocuments_(collectionPath) {
   }
 
   return result;
+}
+
+/**
+ * 22. Schedule ticket publication for a future date/time.
+ */
+function handleScheduleTicketPublication_(body) {
+  var idToken = String(body.idToken || '').trim();
+  if (!idToken) {
+    return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
+  }
+  var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role !== 'admin') {
+    return jsonResponse_({ success: false, code: 'PERMISSION_DENIED', error: 'Only Admins can schedule ticket publication.' });
+  }
+
+  var drawDate = String(body.drawDate || '').trim();
+  var seriesId = String(body.seriesId || 'default').trim() || 'default';
+  var seriesTitle = String(body.seriesTitle || 'CUSTOM NAME').trim();
+  var rawTickets = Array.isArray(body.tickets) ? body.tickets.slice() : [];
+  var scheduledForMs = Number(body.scheduledForMs || 0);
+  var scheduledForIso = String(body.scheduledForIso || '').trim();
+  var scheduledForDisplay = String(body.scheduledForDisplay || '').trim();
+  var timezone = String(body.timezone || 'Asia/Kolkata').trim();
+
+  if (!drawDate) {
+    return jsonResponse_({ success: false, error: 'drawDate is required.' });
+  }
+  if (!scheduledForMs || isNaN(scheduledForMs)) {
+    return jsonResponse_({ success: false, error: 'Valid scheduledForMs timestamp is required.' });
+  }
+
+  if (body.range) {
+    var rStart = 0;
+    var rEnd = 0;
+    if (typeof body.range === 'string') {
+      var parts = body.range.split('-');
+      if (parts.length === 2) {
+        rStart = parseInt(parts[0], 10);
+        rEnd = parseInt(parts[1], 10);
+      }
+    } else if (typeof body.range === 'object') {
+      rStart = parseInt(body.range.start, 10);
+      rEnd = parseInt(body.range.end, 10);
+    }
+    if (!isNaN(rStart) && !isNaN(rEnd) && rEnd >= rStart && (rEnd - rStart) <= 1000) {
+      for (var r = rStart; r <= rEnd; r++) {
+        rawTickets.push(String(r).padStart(4, '0'));
+      }
+    }
+  }
+
+  var normalizedTickets = [];
+  var seen = {};
+  for (var i = 0; i < rawTickets.length; i++) {
+    var normNum = normalizeTicketNumber_(rawTickets[i]);
+    if (normNum && !seen[normNum]) {
+      seen[normNum] = true;
+      normalizedTickets.push(normNum);
+    }
+  }
+
+  if (!normalizedTickets.length) {
+    return jsonResponse_({ success: false, error: 'At least one ticket number is required.' });
+  }
+
+  var scheduleId = 'sched_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  var now = Date.now();
+  var nowIso = new Date(now).toISOString();
+
+  var scheduleDoc = {
+    id: scheduleId,
+    drawDate: drawDate,
+    seriesId: seriesId,
+    seriesTitle: seriesTitle,
+    tickets: normalizedTickets,
+    ticketCount: normalizedTickets.length,
+    scheduledForMs: scheduledForMs,
+    scheduledForIso: scheduledForIso || new Date(scheduledForMs).toISOString(),
+    scheduledForDisplay: scheduledForDisplay,
+    timezone: timezone,
+    status: 'SCHEDULED',
+    createdAt: nowIso,
+    createdBy: operator.name,
+    createdByUid: operator.uid
+  };
+
+  firestoreSetDocument_('scheduledPublications/' + encodeURIComponent(scheduleId), scheduleDoc);
+
+  return jsonResponse_({
+    success: true,
+    schedule: scheduleDoc,
+    message: 'Publication scheduled for ' + (scheduledForDisplay || new Date(scheduledForMs).toLocaleString())
+  });
+}
+
+/**
+ * 23. Cancel a scheduled publication before execution.
+ */
+function handleCancelScheduledPublication_(body) {
+  var idToken = String(body.idToken || '').trim();
+  if (!idToken) {
+    return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
+  }
+  var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role !== 'admin') {
+    return jsonResponse_({ success: false, code: 'PERMISSION_DENIED', error: 'Only Admins can cancel scheduled publications.' });
+  }
+
+  var scheduleId = String(body.scheduleId || '').trim();
+  if (!scheduleId) {
+    return jsonResponse_({ success: false, error: 'scheduleId is required.' });
+  }
+
+  var path = 'scheduledPublications/' + encodeURIComponent(scheduleId);
+  var doc = firestoreGetDocument_(path);
+  if (!doc) {
+    return jsonResponse_({ success: false, code: 'NOT_FOUND', error: 'Scheduled publication not found.' });
+  }
+
+  if (doc.status === 'PUBLISHED') {
+    return jsonResponse_({ success: false, code: 'ALREADY_PUBLISHED', error: 'Cannot cancel a publication that has already executed.' });
+  }
+
+  doc.status = 'CANCELLED';
+  doc.cancelledAt = new Date().toISOString();
+  doc.cancelledBy = operator.name;
+  firestoreSetDocument_(path, doc);
+
+  return jsonResponse_({ success: true, scheduleId: scheduleId, status: 'CANCELLED' });
+}
+
+/**
+ * 24. Retrieve all scheduled publications.
+ */
+function handleGetScheduledPublications_(body) {
+  var idToken = String(body.idToken || '').trim();
+  if (!idToken) {
+    return jsonResponse_({ success: false, code: 'AUTH_REQUIRED', error: 'Authentication required.' });
+  }
+  var operator = verifyOtpVerifiedOperator_(idToken);
+  if (operator.role === 'paid_employee') {
+    return jsonResponse_({ success: false, code: 'PERMISSION_DENIED', error: 'Paid Employees cannot view schedules.' });
+  }
+
+  var docs = firestoreListDocuments_('scheduledPublications') || [];
+  docs.sort(function(a, b) {
+    return Number(a.scheduledForMs || 0) - Number(b.scheduledForMs || 0);
+  });
+
+  return jsonResponse_({ success: true, schedules: docs });
+}
+
+/**
+ * 25. Process all due scheduled publications (idempotent server-side execution).
+ */
+function handleProcessScheduledPublications_(body) {
+  var result = processScheduledPublicationsInternal_();
+  return jsonResponse_(result);
+}
+
+function processScheduledPublicationsInternal_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { success: false, error: 'Could not acquire lock for scheduler execution.' };
+  }
+
+  try {
+    var now = Date.now();
+    var nowIso = new Date(now).toISOString();
+    var docs = firestoreListDocuments_('scheduledPublications') || [];
+    var processed = 0;
+    var publishedCount = 0;
+
+    for (var i = 0; i < docs.length; i++) {
+      var item = docs[i];
+      if (item.status === 'SCHEDULED' && Number(item.scheduledForMs || 0) <= now) {
+        processed++;
+        try {
+          var drawDate = String(item.drawDate || '').trim();
+          var seriesId = String(item.seriesId || 'default').trim() || 'default';
+          var seriesTitle = String(item.seriesTitle || 'CUSTOM NAME').trim();
+          var drawKey = normalizeDrawDateKey_(drawDate);
+          var tickets = Array.isArray(item.tickets) ? item.tickets : [];
+          var addedThis = 0;
+          var skippedThis = 0;
+
+          for (var t = 0; t < tickets.length; t++) {
+            var normNum = normalizeTicketNumber_(tickets[t]);
+            if (!normNum) continue;
+
+            // Strict safety: Never overwrite or republish tickets that are locked, pending, or booked!
+            if (isTicketConfirmedOnServer_(drawDate, seriesId, normNum)) {
+              skippedThis++;
+              continue;
+            }
+
+            var ticketDocPath = 'draws/' + encodeURIComponent(drawDate) + '/series/' + encodeURIComponent(seriesId) + '/tickets/' + encodeURIComponent(normNum);
+            var existingTicket = firestoreGetDocument_(ticketDocPath);
+            if (existingTicket && (existingTicket.bookingStatus === 'Booked' || existingTicket.bookingStatus === 'Pending Confirmation')) {
+              skippedThis++;
+              continue;
+            }
+
+            var invDocId = drawKey + '_' + encodeURIComponent(seriesId) + '_' + normNum;
+            var invPath = 'ticketInventory/' + encodeURIComponent(invDocId);
+
+            firestoreSetDocument_(invPath, {
+              id: invDocId,
+              ticketNumber: normNum,
+              drawDate: drawDate,
+              drawKey: drawKey,
+              seriesId: seriesId,
+              seriesTitle: seriesTitle,
+              status: 'PUBLISHED',
+              publishedAt: nowIso,
+              publishedBy: item.createdBy || 'Scheduled Publisher',
+              publishedByUid: item.createdByUid || 'system_scheduler',
+              updatedAt: nowIso
+            });
+
+            firestoreSetDocument_(ticketDocPath, {
+              ticketNumber: normNum,
+              drawDate: drawDate,
+              seriesId: seriesId,
+              bookingStatus: 'Available',
+              status: 'Available',
+              updatedAt: nowIso
+            });
+
+            addedThis++;
+            publishedCount++;
+          }
+
+          item.status = 'PUBLISHED';
+          item.publishedAtIso = nowIso;
+          item.publishedCount = addedThis;
+          item.skippedCount = skippedThis;
+          firestoreSetDocument_('scheduledPublications/' + encodeURIComponent(item.id), item);
+        } catch (itemErr) {
+          item.status = 'FAILED';
+          item.error = String(itemErr && itemErr.message ? itemErr.message : itemErr);
+          item.failedAtIso = nowIso;
+          firestoreSetDocument_('scheduledPublications/' + encodeURIComponent(item.id), item);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      processedSchedulesCount: processed,
+      publishedTicketsTotal: publishedCount,
+      serverNowIso: nowIso
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Time-driven trigger handler that can be installed to run every 1 minute.
+ */
+function processScheduledPublicationsTrigger() {
+  processScheduledPublicationsInternal_();
 }

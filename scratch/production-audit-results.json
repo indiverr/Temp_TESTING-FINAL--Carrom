@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-10-29T08:00:28.137Z",
+  "projectId": "carrom-df56a",
+  "totalBookings": 3,
+  "statusDistribution": {
+    "paymentStatus: \"Paid\" | bookingStatus: \"Booked\"": 3
+  },
+  "inconsistentCount": 0,
+  "inconsistentRecords": [],
+  "allBookingsRawPreview": [
+    {
+      "id": "booking_02_Oct_2026_0098",
+      "ticketNumbers": "0098",
+      "paymentStatus": "Paid",
+      "bookingStatus": "Booked",
+      "totalAmount": 50,
+      "amountPaid": 50,
+      "remainingBalance": 0
+    },
+    {
+      "id": "booking_02_Oct_2026_0099",
+      "ticketNumbers": "0099",
+      "paymentStatus": "Paid",
+      "bookingStatus": "Booked",
+      "totalAmount": 50,
+      "amountPaid": 50,
+      "remainingBalance": 0
+    },
+    {
+      "id": "booking_02_Oct_2026_0105",
+      "ticketNumbers": "0105",
+      "paymentStatus": "Paid",
+      "bookingStatus": "Booked",
+      "totalAmount": 50,
+      "amountPaid": 50,
+      "remainingBalance": 0
+    }
+  ]
+}

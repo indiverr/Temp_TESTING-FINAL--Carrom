@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PhoneFrame } from './components/PhoneFrame';
 import { LoginScreen } from './components/LoginScreen';
 import { EnterDrawDateScreen } from './components/EnterDrawDateScreen';
@@ -32,6 +32,7 @@ import {
   DEFAULT_WEEKLY_PRESETS,
   DayOfWeek,
   PaymentQueueTask,
+  ScheduledPublication,
 } from './types';
 import {
   Smartphone,
@@ -71,6 +72,8 @@ export const LotteryAppMain: React.FC = () => {
   const [inventoryTickets, setInventoryTickets] = useState<TicketInventoryItem[]>([]);
   const [gridAppearance, setGridAppearance] = useState<GridAppearanceConfig>(DEFAULT_GRID_APPEARANCE);
   const [weeklyPresets, setWeeklyPresets] = useState<WeeklyTicketPresetsConfig>(DEFAULT_WEEKLY_PRESETS);
+  const [scheduledPublications, setScheduledPublications] = useState<ScheduledPublication[]>([]);
+  const paymentSubmissionKeysRef = useRef<Record<string, string>>({});
 
   // Staff and Role state
   const [currentStaff, setCurrentStaff] = useState<EmployeeProfile>({
@@ -99,10 +102,10 @@ export const LotteryAppMain: React.FC = () => {
 
   // Winners and Papers state
   const [winners, setWinners] = useState<TodayWinnerRecord[]>(() =>
-    lotteryService.getWinners()
+    isFirebaseConfigured() ? [] : lotteryService.getWinners()
   );
   const [papers, setPapers] = useState<ResultPaperDocument[]>(() =>
-    lotteryService.getResultPapers()
+    isFirebaseConfigured() ? [] : lotteryService.getResultPapers()
   );
 
   // Gallery modal
@@ -124,16 +127,32 @@ export const LotteryAppMain: React.FC = () => {
     const effectiveUid = currentStaff.id || liveFirebase.getStatus().currentUser?.uid || '';
     if (isLiveFirebaseMode) {
       try {
-        const [fbBookings, fbWinners, fbPapers, fbConfig] = await Promise.all([
+        const [fbBookings, fbWinners, fbPapers, fbConfig, fbAppearance] = await Promise.all([
           liveFirebase.fetchBookingsFirestore(config.businessDate, currentRole, effectiveUid),
           liveFirebase.fetchWinnersFirestore(config.businessDate),
           liveFirebase.fetchResultPapersFirestore(config.businessDate),
           liveFirebase.fetchConfigFirestore(),
+          liveFirebase.fetchGridAppearanceFirestore(),
         ]);
-        if (fbBookings) setAllBookings(fbBookings);
-        if (fbWinners.length > 0) setWinners(fbWinners);
-        if (fbPapers.length > 0) setPapers(fbPapers);
-        if (fbConfig) setConfig(fbConfig);
+        if (fbBookings !== undefined) setAllBookings(fbBookings);
+        if (fbWinners !== undefined) setWinners(fbWinners);
+        if (fbPapers !== undefined) setPapers(fbPapers);
+        if (fbConfig) {
+          const storedDate =
+            (typeof window !== 'undefined' && localStorage.getItem('carrom_active_draw_date')) ||
+            config.businessDate ||
+            fbConfig.businessDate ||
+            '29 Oct 2026';
+          const mergedConfig: SystemConfig = {
+            ...lotteryService.getConfig(),
+            ...fbConfig,
+            businessDate: storedDate,
+            halfTicketPrice: (fbConfig.halfTicketPrice != null && Number(fbConfig.halfTicketPrice) >= 300) ? Number(fbConfig.halfTicketPrice) : 300,
+            fullTicketPrice: (fbConfig.fullTicketPrice != null && Number(fbConfig.fullTicketPrice) >= 570) ? Number(fbConfig.fullTicketPrice) : 570,
+          };
+          setConfig(mergedConfig);
+        }
+        if (fbAppearance) setGridAppearance(fbAppearance);
       } catch (err: any) {
         showToast(`[Firestore Sync Error] ${err.message}`);
       }
@@ -253,7 +272,7 @@ export const LotteryAppMain: React.FC = () => {
   }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate, currentRole, currentStaff.id]);
 
 
-  // Real-time Inventory & Appearance subscription
+  // Real-time Inventory & Appearance & Winners & Papers subscription
   useEffect(() => {
     if (isLiveFirebaseMode && isAuthenticatedAndVerified) {
       const unsubInv = liveFirebase.subscribeTicketInventoryFirestore(
@@ -268,22 +287,65 @@ export const LotteryAppMain: React.FC = () => {
       const unsubPresets = liveFirebase.subscribeWeeklyPresetsFirestore(
         (presets) => setWeeklyPresets(presets)
       );
+      const unsubWinners = liveFirebase.subscribeWinnersFirestore(
+        config.businessDate,
+        (w) => setWinners(w)
+      );
+      const unsubPapers = liveFirebase.subscribeResultPapersFirestore(
+        config.businessDate,
+        (p) => setPapers(p)
+      );
+      const unsubSchedules = liveFirebase.subscribeScheduledPublicationsFirestore(
+        (schedules) => setScheduledPublications(schedules)
+      );
       return () => {
         unsubInv();
         unsubApp();
         unsubPresets();
+        unsubWinners();
+        unsubPapers();
+        unsubSchedules();
       };
     }
     const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
       setInventoryTickets(lotteryService.getInventory(config.businessDate, undefined, currentRole));
       setGridAppearance(lotteryService.getGridAppearance());
       setWeeklyPresets(lotteryService.getWeeklyPresets());
+      setWinners(lotteryService.getWinners());
+      setPapers(lotteryService.getResultPapers());
+      setScheduledPublications(lotteryService.getScheduledPublications());
     });
     setInventoryTickets(lotteryService.getInventory(config.businessDate, undefined, currentRole));
     setGridAppearance(lotteryService.getGridAppearance());
     setWeeklyPresets(lotteryService.getWeeklyPresets());
+    setWinners(lotteryService.getWinners());
+    setPapers(lotteryService.getResultPapers());
+    setScheduledPublications(lotteryService.getScheduledPublications());
     return () => unsubLocal();
   }, [isLiveFirebaseMode, isAuthenticatedAndVerified, config.businessDate, currentRole]);
+
+  // Auto-process due scheduled ticket publications every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        if (isLiveFirebaseMode) {
+          const res = await liveFirebase.processScheduledPublicationsFirestore();
+          if (res?.processedCount && res.processedCount > 0) {
+            showToast(`Auto-published ${res.processedCount} scheduled ticket release(s)!`);
+          }
+        } else {
+          const res = lotteryService.processScheduledPublications();
+          if (res?.processedCount && res.processedCount > 0) {
+            setScheduledPublications(lotteryService.getScheduledPublications());
+            showToast(`Auto-published ${res.processedCount} scheduled ticket release(s)!`);
+          }
+        }
+      } catch (err) {
+        console.warn('[AutoScheduleCheck] Error:', err);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [isLiveFirebaseMode]);
 
   // Real-time Ticket Locks subscription
   useEffect(() => {
@@ -477,9 +539,13 @@ export const LotteryAppMain: React.FC = () => {
       );
     } catch {}
     setIsAuthenticatedAndVerified(true);
-    // Explicitly reset bookings so no stale records from any previous session linger
+    // Explicitly reset operational state so no stale records from any previous session linger
     setAllBookings([]);
     setPaymentQueueTasks([]);
+    if (isLiveFirebaseMode) {
+      setWinners([]);
+      setPapers([]);
+    }
     if (type === 'paid_employee') {
       setCurrentScreen('payment-queue');
     } else if (type === 'admin') {
@@ -580,9 +646,11 @@ export const LotteryAppMain: React.FC = () => {
       );
       if (fbRes.success) {
         showToast(
-          `[Firestore] Booked ${fbRes.bookedCount} Ticket(s) • Customer ID ${fbRes.customerId || '#5316'}`
+          `[Firestore] Booked ${fbRes.bookedCount} Ticket(s) successfully`
         );
-        reloadData();
+        if (fbRes.bookings && fbRes.bookings.length > 0) {
+          setAllBookings((prev) => [...(fbRes.bookings || []), ...prev]);
+        }
         return fbRes;
       } else {
         showToast(`[Firestore Error] ${fbRes.error}`);
@@ -605,8 +673,11 @@ export const LotteryAppMain: React.FC = () => {
       }
     );
     if (res.success) {
-      reloadData();
-      showToast(`Booked ${res.bookedCount} Ticket(s) • Customer ID ${res.customerId || '#5316'}`);
+      if (res.bookings && res.bookings.length > 0) {
+        setAllBookings((prev) => [...(res.bookings || []), ...prev]);
+      }
+      setActiveLocks(lotteryService.getActiveLocks(config.businessDate));
+      showToast(`Booked ${res.bookedCount} Ticket(s) successfully`);
       return res;
     } else {
       showToast(res.error || 'Failed to book');
@@ -614,14 +685,54 @@ export const LotteryAppMain: React.FC = () => {
     }
   };
 
+  const getDurableSubmissionKey = (ticketNum: string): string | undefined => {
+    if (paymentSubmissionKeysRef.current[ticketNum]) {
+      return paymentSubmissionKeysRef.current[ticketNum];
+    }
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        return window.sessionStorage.getItem(`CARROM_PENDING_SUBMISSION_${ticketNum}`) || undefined;
+      }
+    } catch {}
+    return undefined;
+  };
+
+  const setDurableSubmissionKey = (ticketNum: string, key: string): void => {
+    paymentSubmissionKeysRef.current[ticketNum] = key;
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem(`CARROM_PENDING_SUBMISSION_${ticketNum}`, key);
+      }
+    } catch {}
+  };
+
+  const clearDurableSubmissionKey = (ticketNum: string): void => {
+    delete paymentSubmissionKeysRef.current[ticketNum];
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.removeItem(`CARROM_PENDING_SUBMISSION_${ticketNum}`);
+      }
+    } catch {}
+  };
+
   const handleConfirmPayment = async (
     ticketNum: string,
     amount: number,
     paymentMethod: string,
     paymentRef: string,
-    notes?: string
+    notes?: string,
+    options?: { idempotencyKey?: string; newPayment?: boolean }
   ) => {
     if (isLiveFirebaseMode) {
+      const recoveredKey = !options?.newPayment ? getDurableSubmissionKey(ticketNum) : undefined;
+      const activeKey =
+        options?.idempotencyKey ||
+        (paymentRef && paymentRef.trim()) ||
+        recoveredKey ||
+        `idem_pay_${ticketNum}_${config.businessDate}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+      setDurableSubmissionKey(ticketNum, activeKey);
+
       const fbRes = await liveFirebase.confirmPaymentFirestore(
         ticketNum,
         config.businessDate,
@@ -630,9 +741,11 @@ export const LotteryAppMain: React.FC = () => {
         paymentRef,
         currentStaff.name,
         currentRole,
-        notes
+        notes,
+        { idempotencyKey: activeKey, newPayment: options?.newPayment }
       );
       if (fbRes.success) {
+        clearDurableSubmissionKey(ticketNum);
         showToast(`[Firestore] Settlement confirmed for #${ticketNum}`);
         reloadData();
       } else {
@@ -742,17 +855,28 @@ export const LotteryAppMain: React.FC = () => {
     prizeAmount: number,
     notes?: string
   ) => {
+    return handleAddWinnerRecord({
+      drawDate: config.businessDate,
+      seriesTitle: config.seriesTitle,
+      winningNumber,
+      prizeCategory,
+      prizeAmount,
+      winningAmount: prizeAmount,
+      notes,
+    });
+  };
+
+  const handleAddWinnerRecord = async (
+    record: Omit<TodayWinnerRecord, 'id' | 'enteredAt'>
+  ) => {
     if (isLiveFirebaseMode) {
       const fbRes = await liveFirebase.addWinnerFirestore(
         {
-          drawDate: config.businessDate,
-          seriesTitle: config.seriesTitle,
-          winningNumber,
-          prizeCategory,
-          prizeAmount,
-          verifiedBy: currentStaff.name,
-          status: 'Official',
-          notes,
+          ...record,
+          drawDate: record.drawDate || config.businessDate,
+          seriesTitle: record.seriesTitle || config.seriesTitle,
+          verifiedBy: record.verifiedBy || currentStaff.name,
+          status: record.status || 'Official',
           enteredAt: new Date().toLocaleString([], {
             day: '2-digit',
             month: 'short',
@@ -764,7 +888,7 @@ export const LotteryAppMain: React.FC = () => {
         currentRole
       );
       if (fbRes.success) {
-        showToast(`[Firestore] Announced Winner #${winningNumber}`);
+        showToast(`Announced Winner #${record.winningNumber}`);
         reloadData();
       } else {
         showToast(`[Firestore Error] ${fbRes.error}`);
@@ -774,22 +898,61 @@ export const LotteryAppMain: React.FC = () => {
 
     const res = lotteryService.addWinnerRecord(
       {
-        drawDate: config.businessDate,
-        seriesTitle: config.seriesTitle,
-        winningNumber,
-        prizeCategory,
-        prizeAmount,
-        verifiedBy: currentStaff.name,
-        status: 'Official',
-        notes,
+        ...record,
+        drawDate: record.drawDate || config.businessDate,
+        seriesTitle: record.seriesTitle || config.seriesTitle,
+        verifiedBy: record.verifiedBy || currentStaff.name,
+        status: record.status || 'Official',
       },
       currentRole
     );
     if (res.success) {
       reloadData();
-      showToast(`Announced Winner #${winningNumber}`);
+      showToast(`Announced Winner #${record.winningNumber}`);
     } else {
       showToast(res.error || 'Failed to add winner');
+    }
+  };
+
+  const handleUpdateWinnerAmount = async (winnerId: string, winningAmount: number) => {
+    if (isLiveFirebaseMode) {
+      const fbRes = await liveFirebase.updateWinnerAmountFirestore(winnerId, winningAmount, currentRole);
+      if (fbRes.success) {
+        showToast(`Updated winning amount: ₹${winningAmount.toLocaleString('en-IN')}`);
+        reloadData();
+      } else {
+        showToast(`Update failed: ${fbRes.error}`);
+      }
+      return;
+    }
+
+    const res = lotteryService.updateWinnerAmount(winnerId, winningAmount, currentRole);
+    if (res.success) {
+      reloadData();
+      showToast(`Updated winning amount: ₹${winningAmount.toLocaleString('en-IN')}`);
+    } else {
+      showToast(res.error || 'Failed to update winning amount');
+    }
+  };
+
+  const handleDeleteWinner = async (winnerId: string) => {
+    if (isLiveFirebaseMode) {
+      const fbRes = await liveFirebase.deleteWinnerFirestore(winnerId, currentRole);
+      if (fbRes.success) {
+        showToast('Winner deleted successfully');
+        reloadData();
+      } else {
+        showToast(`Delete failed: ${fbRes.error}`);
+      }
+      return;
+    }
+
+    const res = lotteryService.deleteWinnerRecord(winnerId, currentRole);
+    if (res.success) {
+      reloadData();
+      showToast('Winner deleted successfully');
+    } else {
+      showToast(res.error || 'Failed to delete winner');
     }
   };
 
@@ -841,6 +1004,23 @@ export const LotteryAppMain: React.FC = () => {
     } else {
       showToast(res.error || 'Upload failed');
     }
+  };
+
+  const handleSelectDrawDate = (selectedDate: string) => {
+    const cleanDate = selectedDate.trim();
+    if (!cleanDate) return;
+    // 1. Establish canonical active draw date in config state immediately
+    setConfig((prev) => ({ ...prev, businessDate: cleanDate }));
+    // 2. Persist in localStorage so reloads and navigation restore this exact date
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('carrom_active_draw_date', cleanDate);
+      }
+    } catch {}
+    // 3. Keep lotteryService aligned
+    lotteryService.setActiveDrawDate(cleanDate);
+    // 4. Navigate directly to ticket inventory
+    setCurrentScreen('inventory');
   };
 
   const handleSaveConfig = async (updated: Partial<SystemConfig>) => {
@@ -931,17 +1111,134 @@ export const LotteryAppMain: React.FC = () => {
     return { success: localRes.success, addedCount: localRes.added.length, error: localRes.error };
   };
 
+  const handleSchedulePublication = async (params: {
+    drawDate: string;
+    seriesId: string;
+    seriesTitle: string;
+    tickets: string[];
+    scheduledForMs: number;
+    scheduledForIso?: string;
+    scheduledForDisplay?: string;
+    timezone?: string;
+  }) => {
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.scheduleTicketPublicationFirestore({
+        ...params,
+        operator: { id: currentStaff.id, name: currentStaff.name, role: currentRole },
+      });
+      if (res.success) {
+        showToast(`Scheduled ${params.tickets.length} tickets for ${params.scheduledForDisplay || 'future release'}`);
+        reloadData();
+      } else {
+        showToast(`[Error] ${res.error}`);
+      }
+      return res;
+    }
+    const localRes = lotteryService.schedulePublication({
+      ...params,
+      createdBy: currentStaff.name,
+      createdByUid: currentStaff.id,
+    });
+    if (localRes.success) {
+      setScheduledPublications(lotteryService.getScheduledPublications());
+      showToast(`Scheduled ${params.tickets.length} tickets for ${params.scheduledForDisplay || 'future release'}`);
+      reloadData();
+    }
+    return localRes;
+  };
+
+  const handleCancelScheduledPublication = async (scheduleId: string) => {
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.cancelScheduledPublicationFirestore(scheduleId, {
+        id: currentStaff.id,
+        name: currentStaff.name,
+        role: currentRole,
+      });
+      if (res.success) {
+        showToast('Scheduled ticket publication cancelled');
+        reloadData();
+      } else {
+        showToast(`[Error] ${res.error}`);
+      }
+      return res;
+    }
+    const localRes = lotteryService.cancelScheduledPublication(scheduleId);
+    if (localRes.success) {
+      setScheduledPublications(lotteryService.getScheduledPublications());
+      showToast('Scheduled ticket publication cancelled');
+      reloadData();
+    } else {
+      showToast(localRes.error || 'Failed to cancel schedule');
+    }
+    return localRes;
+  };
+
+  const handleUpdateScheduledPublication = async (
+    scheduleId: string,
+    params: {
+      tickets: string[];
+      scheduledForMs: number;
+      scheduledForIso?: string;
+      scheduledForDisplay?: string;
+    }
+  ) => {
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.updateScheduledPublicationFirestore(scheduleId, params, {
+        id: currentStaff.id,
+        name: currentStaff.name,
+        role: currentRole,
+      });
+      if (res.success) {
+        showToast('Scheduled collection updated successfully');
+        reloadData();
+      } else {
+        showToast(`[Error] ${res.error}`);
+      }
+      return res;
+    }
+    const localRes = lotteryService.updateScheduledPublication(scheduleId, params);
+    if (localRes.success) {
+      setScheduledPublications(lotteryService.getScheduledPublications());
+      showToast('Scheduled collection updated successfully');
+      reloadData();
+    } else {
+      showToast(localRes.error || 'Failed to update schedule');
+    }
+    return localRes;
+  };
+
+  const handleProcessScheduledPublications = async (): Promise<{ success: boolean; processedCount?: number }> => {
+    if (isLiveFirebaseMode) {
+      const res = await liveFirebase.processScheduledPublicationsFirestore();
+      if (res.processedCount && res.processedCount > 0) {
+        showToast(`Auto-published ${res.processedCount} scheduled release(s)!`);
+        reloadData();
+      }
+      return res;
+    }
+    const localRes = lotteryService.processScheduledPublications();
+    if (localRes.processedCount > 0) {
+      setScheduledPublications(lotteryService.getScheduledPublications());
+      showToast(`Auto-published ${localRes.processedCount} scheduled release(s)!`);
+      reloadData();
+    }
+    return { success: localRes.success, processedCount: localRes.processedCount };
+  };
+
   const handleUpdateGridAppearance = async (newConfig: Partial<GridAppearanceConfig>) => {
+    setGridAppearance((prev) => ({ ...prev, ...newConfig }));
     if (isLiveFirebaseMode) {
       const res = await liveFirebase.updateGridAppearanceFirestore(newConfig, currentRole);
       if (res.success) {
         showToast('Appearance settings saved');
+        if (res.config) setGridAppearance(res.config);
       }
       return res;
     }
     const localRes = lotteryService.updateGridAppearance(newConfig, currentRole);
     if (localRes.success) {
       showToast('Appearance settings saved');
+      if (localRes.config) setGridAppearance(localRes.config);
     }
     return localRes;
   };
@@ -1051,6 +1348,7 @@ export const LotteryAppMain: React.FC = () => {
   };
 
   const unpaidList = allBookings.filter((b) => b.bookingStatus === 'Booked' && b.paymentStatus !== 'Paid');
+  const confirmedList = allBookings.filter((b) => b.bookingStatus === 'Booked');
   const paidList = allBookings.filter((b) => b.bookingStatus === 'Booked' && b.paymentStatus === 'Paid');
   const pendingList = allBookings.filter((b) => b.bookingStatus === 'Pending Confirmation');
 
@@ -1143,7 +1441,7 @@ export const LotteryAppMain: React.FC = () => {
               </button>
             )}
 
-            {/* Restricted Payment Queue: Paid Employee and Admin only */}
+            {/* Report: Paid Employee and Admin only */}
             {(currentRole === 'paid_employee' || currentRole === 'admin') && (
               <button
                 onClick={() => navigateProtected('payment-queue')}
@@ -1153,7 +1451,7 @@ export const LotteryAppMain: React.FC = () => {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
               >
-                <span>Payment Queue</span>
+                <span>Report</span>
                 {paymentQueueTasks.filter((t) => t.status === 'PENDING').length > 0 && (
                   <span
                     className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
@@ -1187,7 +1485,7 @@ export const LotteryAppMain: React.FC = () => {
                         : 'bg-slate-200 text-slate-700'
                     }`}
                   >
-                    {unpaidList.length}
+                    {pendingList.length}
                   </span>
                 </button>
                 <button
@@ -1206,7 +1504,7 @@ export const LotteryAppMain: React.FC = () => {
                         : 'bg-slate-200 text-slate-700'
                     }`}
                   >
-                    {paidList.length}
+                    {confirmedList.length}
                   </span>
                 </button>
               </>
@@ -1337,10 +1635,9 @@ export const LotteryAppMain: React.FC = () => {
               {isAuthenticatedAndVerified && currentScreen === 'enter-date' && (
                 <EnterDrawDateScreen
                   currentStaff={currentStaff}
-                  onEnterDraw={(selectedDate) => {
-                    handleSaveConfig({ businessDate: selectedDate });
-                    setCurrentScreen('inventory');
-                  }}
+                  currentDrawDate={config.businessDate}
+                  allBookings={allBookings}
+                  onEnterDraw={handleSelectDrawDate}
                   onOpenAvailableGallery={() => setIsGalleryOpen(true)}
                   weeklyPresets={weeklyPresets}
                 />
@@ -1355,6 +1652,11 @@ export const LotteryAppMain: React.FC = () => {
                   inventoryTickets={inventoryTickets}
                   gridAppearance={gridAppearance}
                   weeklyPresets={weeklyPresets}
+                  scheduledPublications={scheduledPublications}
+                  onSchedulePublication={handleSchedulePublication}
+                  onUpdateScheduledPublication={handleUpdateScheduledPublication}
+                  onCancelScheduledPublication={handleCancelScheduledPublication}
+                  onProcessScheduledPublications={handleProcessScheduledPublications}
                   onAddTicketInventory={handleAddTicketInventory}
                   onUpdateGridAppearance={handleUpdateGridAppearance}
                   onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
@@ -1418,7 +1720,7 @@ export const LotteryAppMain: React.FC = () => {
               )}
               {isAuthenticatedAndVerified && currentScreen === 'paid' && (
                 <PaidTicketsScreen
-                  paidBookings={paidList}
+                  paidBookings={currentRole === 'employee' ? confirmedList : paidList}
                   allBookings={allBookings}
                   initialSearchQuery={dashboardSearchQuery}
                   currentRole={currentRole}
@@ -1432,6 +1734,7 @@ export const LotteryAppMain: React.FC = () => {
                 <PaymentQueueScreen
                   tasks={paymentQueueTasks}
                   drawDate={config.businessDate}
+                  allBookings={allBookings}
                   currentRole={currentRole}
                   currentStaffName={currentStaff.name}
                   employeeLabelMap={employeeLabelMap}
@@ -1443,10 +1746,15 @@ export const LotteryAppMain: React.FC = () => {
               {isAuthenticatedAndVerified && currentScreen === 'winners' && (
                 <TodayWinnerScreen
                   winners={winners}
+                  allBookings={allBookings}
+                  employeeLabelMap={employeeLabelMap}
                   currentRole={currentRole}
                   businessDate={config.businessDate}
                   seriesTitle={config.seriesTitle}
                   onAddWinner={handleAddWinner}
+                  onAddWinnerRecord={handleAddWinnerRecord}
+                  onUpdateWinnerAmount={handleUpdateWinnerAmount}
+                  onDeleteWinner={handleDeleteWinner}
                   onBack={() => {
                     if (currentRole === 'admin') navigateProtected('dashboard');
                     else if (currentRole === 'paid_employee') navigateProtected('payment-queue');
@@ -1485,10 +1793,9 @@ export const LotteryAppMain: React.FC = () => {
             {isAuthenticatedAndVerified && currentScreen === 'enter-date' && (
               <EnterDrawDateScreen
                 currentStaff={currentStaff}
-                onEnterDraw={(selectedDate) => {
-                  handleSaveConfig({ businessDate: selectedDate });
-                  setCurrentScreen('inventory');
-                }}
+                currentDrawDate={config.businessDate}
+                allBookings={allBookings}
+                onEnterDraw={handleSelectDrawDate}
                 onOpenAvailableGallery={() => setIsGalleryOpen(true)}
                 weeklyPresets={weeklyPresets}
               />
@@ -1503,6 +1810,11 @@ export const LotteryAppMain: React.FC = () => {
                 inventoryTickets={inventoryTickets}
                 gridAppearance={gridAppearance}
                 weeklyPresets={weeklyPresets}
+                scheduledPublications={scheduledPublications}
+                onSchedulePublication={handleSchedulePublication}
+                onUpdateScheduledPublication={handleUpdateScheduledPublication}
+                onCancelScheduledPublication={handleCancelScheduledPublication}
+                onProcessScheduledPublications={handleProcessScheduledPublications}
                 onAddTicketInventory={handleAddTicketInventory}
                 onUpdateGridAppearance={handleUpdateGridAppearance}
                 onUpdateWeeklyPresets={handleUpdateWeeklyPresets}
@@ -1566,7 +1878,7 @@ export const LotteryAppMain: React.FC = () => {
             )}
             {isAuthenticatedAndVerified && currentScreen === 'paid' && (
               <PaidTicketsScreen
-                paidBookings={paidList}
+                paidBookings={currentRole === 'employee' ? confirmedList : paidList}
                 allBookings={allBookings}
                 initialSearchQuery={dashboardSearchQuery}
                 currentRole={currentRole}
@@ -1580,6 +1892,7 @@ export const LotteryAppMain: React.FC = () => {
               <PaymentQueueScreen
                 tasks={paymentQueueTasks}
                 drawDate={config.businessDate}
+                allBookings={allBookings}
                 currentRole={currentRole}
                 currentStaffName={currentStaff.name}
                 employeeLabelMap={employeeLabelMap}
@@ -1591,10 +1904,15 @@ export const LotteryAppMain: React.FC = () => {
             {isAuthenticatedAndVerified && currentScreen === 'winners' && (
               <TodayWinnerScreen
                 winners={winners}
+                allBookings={allBookings}
+                employeeLabelMap={employeeLabelMap}
                 currentRole={currentRole}
                 businessDate={config.businessDate}
                 seriesTitle={config.seriesTitle}
                 onAddWinner={handleAddWinner}
+                onAddWinnerRecord={handleAddWinnerRecord}
+                onUpdateWinnerAmount={handleUpdateWinnerAmount}
+                onDeleteWinner={handleDeleteWinner}
                 onBack={() => {
                   if (currentRole === 'admin') navigateProtected('dashboard');
                   else if (currentRole === 'paid_employee') navigateProtected('payment-queue');

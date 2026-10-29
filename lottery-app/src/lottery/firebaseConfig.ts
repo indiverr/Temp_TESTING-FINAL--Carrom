@@ -136,9 +136,18 @@ export const getFirebaseEnvConfig = (): FirebaseClientConfig => {
 export const isEmulatorMode = (): boolean => {
   const metaEnv = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
   const procEnv = typeof process !== 'undefined' && process.env ? process.env : {};
+  let localSaved = '';
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localSaved = localStorage.getItem('CARROM_USE_EMULATOR') || '';
+    } catch {}
+  }
+  const win = typeof window !== 'undefined' ? (window as any) : {};
   return (
     cleanEnvVal(metaEnv.VITE_USE_FIREBASE_EMULATOR) === 'true' ||
-    cleanEnvVal(procEnv.VITE_USE_FIREBASE_EMULATOR) === 'true'
+    cleanEnvVal(procEnv.VITE_USE_FIREBASE_EMULATOR) === 'true' ||
+    localSaved === 'true' ||
+    win.__CARROM_USE_EMULATOR__ === true
   );
 };
 

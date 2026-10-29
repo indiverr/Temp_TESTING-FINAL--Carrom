@@ -136,7 +136,7 @@ export const TicketBookingDeskScreen: React.FC<TicketBookingDeskScreenProps> = (
   const toggleHalf = (num: string) => {
     setSelectedMultiTickets((prev) =>
       prev.map((item) =>
-        item.ticketNumber === num ? { ...item, half: !item.half } : item
+        item.ticketNumber === num ? { ...item, half: !item.half, full: !item.half ? false : item.full } : item
       )
     );
   };
@@ -144,20 +144,20 @@ export const TicketBookingDeskScreen: React.FC<TicketBookingDeskScreenProps> = (
   const toggleFull = (num: string) => {
     setSelectedMultiTickets((prev) =>
       prev.map((item) =>
-        item.ticketNumber === num ? { ...item, full: !item.full } : item
+        item.ticketNumber === num ? { ...item, full: !item.full, half: !item.full ? false : item.half } : item
       )
     );
   };
 
   const selectAllHalf = (checked: boolean) => {
     setSelectedMultiTickets((prev) =>
-      prev.map((item) => ({ ...item, half: checked }))
+      prev.map((item) => ({ ...item, half: checked, full: checked ? false : item.full }))
     );
   };
 
   const selectAllFull = (checked: boolean) => {
     setSelectedMultiTickets((prev) =>
-      prev.map((item) => ({ ...item, full: checked }))
+      prev.map((item) => ({ ...item, full: checked, half: checked ? false : item.half }))
     );
   };
 

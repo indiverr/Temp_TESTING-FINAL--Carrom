@@ -1,0 +1,111 @@
+{
+  "reconciledAt": "2026-10-29T08:00:15.631Z",
+  "projectId": "carrom-df56a",
+  "auditLog": [
+    {
+      "doc": "bookings/booking_02_Oct_2026_0098",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02 Oct 2026_c0_0098",
+      "fields": {
+        "bookingStatus": {
+          "oldValue": "Available",
+          "newValue": "Booked"
+        },
+        "bookedTicketId": {
+          "oldValue": null,
+          "newValue": "booking_02_Oct_2026_0098"
+        }
+      },
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02_Oct_2026_default_0098",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "draws/02 Oct 2026/series/default/tickets/0098",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "bookings/booking_02_Oct_2026_0099",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02 Oct 2026_c0_0099",
+      "fields": {
+        "bookingStatus": {
+          "oldValue": "Available",
+          "newValue": "Booked"
+        },
+        "bookedTicketId": {
+          "oldValue": null,
+          "newValue": "booking_02_Oct_2026_0099"
+        }
+      },
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02_Oct_2026_default_0099",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "draws/02 Oct 2026/series/default/tickets/0099",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "bookings/booking_02_Oct_2026_0105",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02 Oct 2026_c0_0105",
+      "fields": {
+        "bookingStatus": {
+          "oldValue": "Available",
+          "newValue": "Booked"
+        },
+        "bookedTicketId": {
+          "oldValue": null,
+          "newValue": "booking_02_Oct_2026_0105"
+        }
+      },
+      "httpStatus": 200
+    },
+    {
+      "doc": "ticketInventory/02_Oct_2026_default_0105",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    },
+    {
+      "doc": "draws/02 Oct 2026/series/default/tickets/0105",
+      "field": "bookingStatus",
+      "oldValue": "Pending Confirmation",
+      "newValue": "Booked",
+      "httpStatus": 200
+    }
+  ]
+}

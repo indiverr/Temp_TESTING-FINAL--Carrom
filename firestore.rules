@@ -2,32 +2,33 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper authorization functions
+    // =========================================================================
+    // AUTHORIZATION HELPERS
+    // =========================================================================
+
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Enforce first-login 6-digit OTP verification from carromlotterydesk@gmail.com.
-    // Verified status can ONLY be set by the server (Google Apps Script Service Account or Cloud Functions)
-    // via custom token claim `otpVerified == true` or server-only `/users/{uid}` fields.
+    // Resolves role with strict zero-trust fallback ('none' for unprofiled users)
+    function getUserRole() {
+      return request.auth.token.role != null
+        ? request.auth.token.role
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'none')
+            : 'none');
+    }
+
+    // Enforces first-login 6-digit OTP verification
     function isOtpVerified() {
       return isAuthenticated() && (
         request.auth.token.otpVerified == true ||
         (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.otpVerified == true &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.firstLoginCompleted == true
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('otpVerified', false) == true &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('firstLoginCompleted', false) == true
         )
       );
-    }
-    
-    // Resolve role: checks server-signed custom claims first, falls back to server-managed /users/{uid}, defaults to 'employee'
-    function getUserRole() {
-      return request.auth.token.role != null
-        ? request.auth.token.role
-        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-            : 'employee');
     }
     
     function isAdmin() {
@@ -46,25 +47,32 @@ service cloud.firestore {
       return isOtpVerified() && (getUserRole() == 'employee' || getUserRole() == 'admin');
     }
 
-    // 0A. Server-Only OTP Challenges (Never readable or writable by clients)
+    // Binds payment to existing booking identity and outstanding balance
+    function isValidPaymentForBooking(payment, database) {
+      let booking = get(/databases/$(database)/documents/bookings/$(payment.bookingId)).data;
+      return booking.ticketNumber == payment.ticketNumber &&
+             booking.date == payment.drawDate &&
+             booking.customerName == payment.customerName &&
+             payment.amount <= booking.remainingBalance;
+    }
+
+    // =========================================================================
+    // 0. SERVER-ONLY & PRIVATE COLLECTIONS
+    // =========================================================================
+
     match /otpChallenges/{userId} {
       allow read, write: if false;
     }
 
-    // 0B. Server-Only Username Directory (Prevents public username-to-email enumeration)
     match /userDirectory/{username} {
       allow read, write: if false;
     }
 
-    // 0C. Server-Only Booking Idempotency Store (Prevents duplicate bookings/codes on network retry)
     match /bookingIdempotency/{idempotencyKey} {
       allow read, write: if false;
     }
 
-    // 0D. Customer Serial Code Registry & Customer Identity Records:
-    // - Readable by Admin ONLY (Requirement 1 & 3: Paid Employees and standard employees must NOT read or enumerate customers or codes)
-    // - Writable ONLY by the trusted backend (Apps Script Service Account); clients can never
-    //   create, alter, or impersonate customer serial codes (#XXXX).
+    // Customer identity and serial numbers: Admin only
     match /customerCodes/{codeDigits} {
       allow read: if isAdmin();
       allow write: if false;
@@ -75,111 +83,133 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // 0E. Real-Time Ticket Locks (/ticketLocks/{drawDateKey}_{ticketNumber}):
-    // - Readable by Admin and Regular Employees (shared ticket availability for grid booking).
-    // - Requirement 4: Paid employees must NOT read or access /ticketLocks (cannot infer or access ticket grid).
-    // - Writable ONLY by trusted backend so no client can forge, extend, or release another user's lock.
+    // Ticket Locks: Cashiers (Paid Employees) strictly blocked
     match /ticketLocks/{lockDocId} {
       allow read: if isOtpVerified() && !isPaidEmployeeRole();
       allow write: if false;
     }
 
-    // 0F. Persistent Employee Label & Identity Mapping (Admin Only)
-    // - Requirements 2, 3 & 4: Only Admin can access the UID -> Real Name mapping (e.g. L1 — [real name]).
-    // - Paid Employees and Regular Employees are strictly DENIED read/write access.
-    // - Writable exclusively by trusted server backend.
     match /employeeLabels/{employeeUid} {
       allow read: if isAdmin();
       allow write: if false;
     }
 
-    // 1. System Configuration:
-    // - /config/system: readable by verified staff for businessDate & seriesTitle header display.
-    // - /config/appearance, /config/weeklyPresets, /config/employeeLabelRegistry: Admin only.
+    // =========================================================================
+    // 1. SYSTEM & UI CONFIGURATION
+    // =========================================================================
     match /config/{docId} {
-      allow read: if isOtpVerified() && (docId == 'system' ? true : isAdmin());
+      allow read: if isOtpVerified() && (
+        docId == 'system' ||
+        docId == 'appearance' ||
+        isAdmin()
+      );
       allow write: if isAdmin();
     }
 
-    // 2. User Profiles & Role Records:
-    // - Unverified users cannot read `/users/{userId}`.
-    // - Verified non-admin users can `get` ONLY their own `/users/{uid}` document and cannot `list` other users.
-    // - All client writes to `/users/{userId}` are blocked (`allow write: if false;`); user roles and
-    //   `otpVerified` flags are managed exclusively by the server (Apps Script Service Account / Firebase Console).
+    // =========================================================================
+    // 2. USER PROFILES
+    // =========================================================================
     match /users/{userId} {
-      allow get: if isOtpVerified() && (request.auth.uid == userId || isAdmin());
+      allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
       allow write: if false;
     }
 
-    // 3. Deterministic Ticket Reservations: /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber}
-    // - Readable by Admin and Regular Employees (shared ticket availability for grid booking).
-    // - Requirement 3: Paid employees must NOT read or enumerate /draws/.../tickets.
+    // =========================================================================
+    // 3. TICKET RESERVATIONS & INVENTORY
+    // =========================================================================
     match /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber} {
       allow read: if isOtpVerified() && !isPaidEmployeeRole();
       allow create, update: if false;
       allow delete: if isAdmin();
     }
 
-    // 3B. Admin-Controlled Ticket Inventory (/ticketInventory/{drawKey}_{seriesId}_{ticketNumber})
-    // - Readable by Admin and Regular Employees (shared ticket availability for grid booking).
-    // - Requirement 3: Paid employees must NOT read or enumerate /ticketInventory.
     match /ticketInventory/{inventoryId} {
-      allow read: if isOtpVerified() && !isPaidEmployeeRole() && (isAdmin() || resource.data.status == 'PUBLISHED');
+      allow read: if isOtpVerified() && !isPaidEmployeeRole();
       allow write: if isAdmin();
     }
 
-    // 4. Bookings Collection — Strict Role-Based Isolation
-    // - Admin: can view all bookings (Requirement 1).
-    // - Regular Employees: can read ONLY their own bookings (Requirement 2).
-    // - Paid Employees: must NOT read or enumerate /bookings (Requirement 3).
-    // - Client writes/updates blocked: Completed payment task updates and balance changes
-    //   are committed exclusively through the trusted server backend (Apps Script / Admin SDK).
+    // =========================================================================
+    // 4. BOOKINGS (Role-Based Isolation & Immutable Core Identity)
+    // =========================================================================
     match /bookings/{bookingId} {
       allow read: if isOtpVerified() && (
         isAdmin() ||
         (isRegularEmployeeRole() && resource.data.bookedByUid == request.auth.uid)
       );
-      allow create: if false;
-      allow update: if isAdmin();
-      allow delete: if false;
+      allow create, delete: if false;
+      allow update: if isAdmin() &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.ticketNumber == resource.data.ticketNumber &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.bookedByUid == resource.data.bookedByUid;
     }
 
-    // 5. Append-Only Payments Collection
-    // - Admin can view all payments (Requirement 1).
-    // - Client direct writes blocked: payments are committed exclusively via trusted backend (Requirement 6).
+    // =========================================================================
+    // 5. PAYMENTS & CASHIER QUEUE
+    // =========================================================================
     match /payments/{paymentId} {
       allow read: if isAdmin();
-      allow create, update, delete: if false;
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          'bookingId', 'ticketNumber', 'drawDate', 'customerName',
+          'amount', 'paymentMethod', 'paymentRef', 'paymentStatus',
+          'confirmedBy', 'confirmedByUid', 'role', 'createdAt'
+        ])
+        && request.resource.data.bookingId is string
+        && request.resource.data.ticketNumber is string
+        && request.resource.data.drawDate is string
+        && request.resource.data.customerName is string
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.paymentMethod is string
+        && request.resource.data.paymentRef is string
+        && request.resource.data.paymentStatus in ['Paid', 'Partial']
+        && request.resource.data.confirmedBy is string
+        && request.resource.data.confirmedByUid == request.auth.uid
+        && request.resource.data.role == getUserRole()
+        && exists(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId))
+        && isValidPaymentForBooking(request.resource.data, database);
+      allow update, delete: if false;
     }
 
-    // 5B. Restricted Payment Queue Collection (Generated and maintained exclusively by trusted backend)
-    // - Requirement 4: Paid employees can view ONLY a restricted payment queue containing the minimum
-    //   necessary fields for pending or partially paid bookings requiring their action.
-    // - Requirement 5: Generated & maintained by trusted backend; full booking documents never exposed.
-    // - Direct client writes are blocked (Completed action is processed via validated server endpoint).
     match /paymentQueue/{taskId} {
       allow read: if isOtpVerified() && (isAdmin() || isPaidEmployeeRole());
       allow write: if false;
     }
 
-    // 6. Append-Only Audit Trail Collection (Server/Console-read only; clients cannot read audit logs)
+    // =========================================================================
+    // 6. APPEND-ONLY AUDIT TRAIL
+    // =========================================================================
     match /auditEvents/{eventId} {
       allow read: if false;
       allow create: if isEmployee()
+        && request.resource.data.keys().hasOnly([
+          'action', 'bookingBatchId', 'customerId', 'ticketCount',
+          'drawDate', 'performedBy', 'performedByUid', 'role', 'timestamp'
+        ])
         && request.resource.data.action == 'BOOKING_BATCH_CREATED'
+        && request.resource.data.bookingBatchId is string
+        && request.resource.data.customerId is string
         && request.resource.data.ticketCount is int
-        && request.resource.data.ticketCount > 0;
+        && request.resource.data.ticketCount > 0
+        && request.resource.data.drawDate is string
+        && request.resource.data.performedBy is string
+        && request.resource.data.performedByUid is string
+        && request.resource.data.performedByUid == request.auth.uid
+        && request.resource.data.role == getUserRole();
       allow update, delete: if false;
     }
 
-    // 7. Today Winner Records
+    // =========================================================================
+    // 7. WINNERS & RESULT PAPERS
+    // =========================================================================
     match /winners/{winnerId} {
       allow read: if isOtpVerified();
       allow write: if isAdmin();
     }
 
-    // 8. Result Papers
     match /resultPapers/{paperId} {
       allow read: if isOtpVerified();
       allow write: if isAdmin();

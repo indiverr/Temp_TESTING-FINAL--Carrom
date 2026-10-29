@@ -1,24 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ArrowLeft,
   Search,
+  Users,
+  Download,
+  RotateCw,
+  FileText,
+  Calendar,
   CheckCircle2,
   Clock,
-  ShieldCheck,
-  Check,
-  X,
-  CreditCard,
-  RotateCw,
+  Ticket,
 } from 'lucide-react';
-import { PaymentQueueTask, LoginType } from '../types';
+import { PaymentQueueTask, LoginType, TicketBooking } from '../types';
+import { lotteryService } from '../lotteryService';
 
 interface PaymentQueueScreenProps {
   tasks: PaymentQueueTask[];
   drawDate: string;
+  allBookings?: TicketBooking[];
   currentRole: LoginType;
   currentStaffName: string;
   employeeLabelMap?: Record<string, string>;
-  onCompleteTask: (
+  onCompleteTask?: (
     taskId: string,
     bookingId: string,
     amountPaid: number,
@@ -29,395 +32,460 @@ interface PaymentQueueScreenProps {
   onBack?: () => void;
 }
 
+interface CustomerReportRow {
+  employeeId: string;
+  employeeName: string;
+  customerName: string;
+  customerPhone: string;
+  ticketNumbers: string[];
+  ticketCount: number;
+  halfSetCount: number;
+  fullSetCount: number;
+}
+
 export const PaymentQueueScreen: React.FC<PaymentQueueScreenProps> = ({
   tasks,
   drawDate,
+  allBookings = [],
   currentRole,
   currentStaffName,
-  employeeLabelMap,
-  onCompleteTask,
+  employeeLabelMap = {},
   onRefresh,
   onBack,
 }) => {
-  const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
-  const [completingTask, setCompletingTask] = useState<PaymentQueueTask | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
-  const [paymentRef, setPaymentRef] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [isExportingCsv, setIsExportingCsv] = useState(false);
 
-  const pendingTasks = tasks.filter((t) => t.status === 'PENDING');
-  const completedTasks = tasks.filter((t) => t.status === 'COMPLETED');
+  // Discover all registered employee labels L1, L2, L3...
+  const allEmployees = useMemo(() => {
+    const list = lotteryService.getAllEmployees('admin');
+    const labelsMap: Record<string, string> = { ...employeeLabelMap };
 
-  const displayedList = (activeTab === 'pending' ? pendingTasks : completedTasks).filter((t) => {
-    if (!searchQuery.trim()) return true;
-    return t.ticketNumber.toLowerCase().includes(searchQuery.trim().toLowerCase());
-  });
-
-  const handleOpenCompleteModal = (task: PaymentQueueTask) => {
-    setCompletingTask(task);
-    setPaymentMethod('Cash');
-    setPaymentRef(`REC-${Date.now().toString().slice(-6)}`);
-    setActionError(null);
-  };
-
-  const handleConfirmSubmit = async () => {
-    if (!completingTask) return;
-    setIsSubmitting(true);
-    setActionError(null);
-
-    try {
-      const res = await onCompleteTask(
-        completingTask.id,
-        completingTask.bookingId,
-        completingTask.amountDue,
-        paymentMethod,
-        paymentRef
-      );
-
-      if (res.success) {
-        setActionSuccess(`Payment for Ticket #${completingTask.ticketNumber} marked Completed.`);
-        setCompletingTask(null);
-        setTimeout(() => setActionSuccess(null), 4000);
-      } else {
-        setActionError(res.error || 'Failed to complete payment task.');
+    list.forEach((e) => {
+      if (e.label && !labelsMap[e.label]) {
+        labelsMap[e.label] = e.name;
       }
-    } catch (err: any) {
-      setActionError(err.message || 'An unexpected error occurred.');
+    });
+
+    // Also extract from allBookings
+    allBookings.forEach((b) => {
+      if (b.employeeLabel && !labelsMap[b.employeeLabel]) {
+        labelsMap[b.employeeLabel] = b.bookedBy || 'Employee';
+      }
+    });
+
+    const entries = Object.keys(labelsMap).map((lbl) => ({
+      label: lbl,
+      name: labelsMap[lbl],
+    }));
+
+    // Ensure at least L1 exists
+    if (entries.length === 0) {
+      entries.push({ label: 'L1', name: currentStaffName || 'Staff' });
+    }
+
+    entries.sort((a, b) => {
+      const numA = parseInt(a.label.replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt(b.label.replace(/\D/g, ''), 10) || 0;
+      return numA - numB;
+    });
+
+    return entries;
+  }, [employeeLabelMap, allBookings, currentStaffName]);
+
+  const [selectedEmployeeLabel, setSelectedEmployeeLabel] = useState<string>(
+    () => allEmployees[0]?.label || 'L1'
+  );
+
+  // Filter confirmed & paid bookings for the draw date
+  const relevantBookings = useMemo(() => {
+    return allBookings.filter((b) => {
+      // Must be paid or booked
+      const isPaidOrBooked =
+        b.bookingStatus === 'Booked' ||
+        b.bookingStatus === 'Pending Confirmation' ||
+        b.paymentStatus === 'Paid';
+      if (!isPaidOrBooked) return false;
+
+      // Filter by draw date if present
+      if (drawDate && b.date && b.date !== drawDate) {
+        return false;
+      }
+      return true;
+    });
+  }, [allBookings, drawDate]);
+
+  // Aggregate bookings per employee
+  const employeeStatsMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    allEmployees.forEach((e) => {
+      map[e.label] = 0;
+    });
+
+    relevantBookings.forEach((b) => {
+      const lbl = b.employeeLabel || 'L1';
+      map[lbl] = (map[lbl] || 0) + 1;
+    });
+    return map;
+  }, [allEmployees, relevantBookings]);
+
+  // Build grouped customer rows under the selected employee
+  const selectedEmployeeRows = useMemo(() => {
+    const bookingsForEmp = relevantBookings.filter(
+      (b) => (b.employeeLabel || 'L1') === selectedEmployeeLabel
+    );
+
+    const customerMap = new Map<string, CustomerReportRow>();
+    const empName =
+      employeeLabelMap[selectedEmployeeLabel] ||
+      allEmployees.find((e) => e.label === selectedEmployeeLabel)?.name ||
+      'Employee';
+
+    bookingsForEmp.forEach((b) => {
+      const key = (b.customerPhone || b.customerName || b.id || 'walk-in').trim().toLowerCase();
+      const existing = customerMap.get(key);
+
+      const ticketNum = '#' + String(b.ticketNumber || '0000').padStart(4, '0');
+      const isHalf = b.ticketType === 'half' || b.ticketType === 'both';
+      const isFull = b.ticketType === 'full' || b.ticketType === 'both';
+
+      if (!existing) {
+        customerMap.set(key, {
+          employeeId: selectedEmployeeLabel,
+          employeeName: empName,
+          customerName: b.customerName || 'Walk-in Customer',
+          customerPhone: b.customerPhone || '—',
+          ticketNumbers: [ticketNum],
+          ticketCount: 1,
+          halfSetCount: isHalf ? 1 : 0,
+          fullSetCount: isFull ? 1 : 0,
+        });
+      } else {
+        if (!existing.ticketNumbers.includes(ticketNum)) {
+          existing.ticketNumbers.push(ticketNum);
+        }
+        existing.ticketCount += 1;
+        if (isHalf) existing.halfSetCount += 1;
+        if (isFull) existing.fullSetCount += 1;
+      }
+    });
+
+    let list = Array.from(customerMap.values());
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter((r) => {
+        const nameMatch = r.customerName.toLowerCase().includes(q);
+        const phoneMatch = r.customerPhone.toLowerCase().includes(q);
+        const ticketMatch = r.ticketNumbers.some((t) => t.toLowerCase().includes(q));
+        return nameMatch || phoneMatch || ticketMatch;
+      });
+    }
+
+    return list;
+  }, [relevantBookings, selectedEmployeeLabel, employeeLabelMap, allEmployees, searchQuery]);
+
+  // Overall totals for selected employee
+  const summaryTotals = useMemo(() => {
+    let tickets = 0;
+    let halfs = 0;
+    let fulls = 0;
+    selectedEmployeeRows.forEach((r) => {
+      tickets += r.ticketCount;
+      halfs += r.halfSetCount;
+      fulls += r.fullSetCount;
+    });
+    return {
+      customers: selectedEmployeeRows.length,
+      tickets,
+      halfs,
+      fulls,
+    };
+  }, [selectedEmployeeRows]);
+
+  // Export CSV for this employee report
+  const handleExportCsv = () => {
+    if (selectedEmployeeRows.length === 0) return;
+    setIsExportingCsv(true);
+    try {
+      const headers = [
+        'Employee ID',
+        'Customer Name',
+        'Booked Ticket Numbers',
+        'Number of Tickets',
+        'Number of Half Set',
+        'Number of Full Set',
+        'Phone Number',
+      ];
+
+      const rows = selectedEmployeeRows.map((r) => [
+        `"${r.employeeId}"`,
+        `"${r.customerName.replace(/"/g, '""')}"`,
+        `"${r.ticketNumbers.join(', ')}"`,
+        r.ticketCount,
+        r.halfSetCount,
+        r.fullSetCount,
+        `"${r.customerPhone}"`,
+      ]);
+
+      const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute(
+        'download',
+        `Employee_Report_${selectedEmployeeLabel}_${drawDate.replace(/ /g, '_')}.csv`
+      );
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } finally {
-      setIsSubmitting(false);
+      setIsExportingCsv(false);
     }
   };
 
   return (
-    <div className="p-3 sm:p-5 max-w-6xl mx-auto">
+    <div className="w-full max-w-6xl mx-auto space-y-4 select-none p-4 sm:p-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-200 gap-3">
         <div className="flex items-center space-x-3">
           {onBack && (
             <button
               onClick={onBack}
-              className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
-              title="Back"
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              title="Go back"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
           <div>
             <div className="flex items-center space-x-2">
-              <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
-                Restricted Payment Queue
-              </h1>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center space-x-1">
-                <ShieldCheck className="w-3 h-3 text-amber-600" />
-                <span>Restricted Queue</span>
-              </span>
+              <FileText className="w-5 h-5 text-blue-600" />
+              <h2 className="text-lg font-bold text-slate-900">Employee Customer Report</h2>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Draw Date: <span className="font-semibold text-slate-800">{drawDate}</span> • Operator:{' '}
-              <span className="font-semibold text-slate-800">{currentStaffName}</span> (
-              {currentRole === 'paid_employee' ? 'Paid Employee' : 'Admin'})
+              Unique reports for staff accounts (L1, L2, ...) — Paid and booked customer records
             </p>
           </div>
         </div>
 
-        {onRefresh && (
-          <button
-            onClick={onRefresh}
-            className="self-start sm:self-auto px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center space-x-1.5 transition-colors shadow-2xs"
-          >
-            <RotateCw className="w-3.5 h-3.5 text-slate-500" />
-            <span>Refresh</span>
-          </button>
-        )}
-      </div>
+        <div className="flex items-center space-x-2 flex-wrap gap-2">
+          <div className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 flex items-center space-x-1.5">
+            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+            <span>Draw: <strong className="text-slate-900">{drawDate}</strong></span>
+          </div>
 
-      {/* Notifications */}
-      {actionSuccess && (
-        <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center space-x-2 animate-in fade-in duration-200">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>{actionSuccess}</span>
-        </div>
-      )}
-
-      {/* Role Notice */}
-      <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-xs flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <CreditCard className="w-4 h-4 text-slate-500 shrink-0" />
-          <span>
-            This restricted queue presents only pending payment verification tasks. Direct customer details and unneeded booking data are strictly isolated.
-          </span>
-        </div>
-      </div>
-
-      {/* Controls: Tabs & Search */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
-        {/* Tabs */}
-        <div className="flex border-b border-slate-200 gap-2">
-          <button
-            onClick={() => setActiveTab('pending')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
-              activeTab === 'pending'
-                ? 'border-amber-600 text-amber-700'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Pending Payment Tasks</span>
-            <span
-              className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
-                pendingTasks.length > 0 ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'
-              }`}
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+              title="Refresh report data"
             >
-              {pendingTasks.length}
-            </span>
-          </button>
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>Refresh</span>
+            </button>
+          )}
+        </div>
+      </div>
 
-          <button
-            onClick={() => setActiveTab('completed')}
-            className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center space-x-1.5 ${
-              activeTab === 'completed'
-                ? 'border-emerald-600 text-emerald-700'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Completed</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-200">
-              {completedTasks.length}
-            </span>
-          </button>
+      {/* Small Boxes for each employee: L1, L2, L3... */}
+      <div>
+        <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block mb-2">
+          Select Employee to View Unique Report:
+        </label>
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
+          {allEmployees.map((emp) => {
+            const isSelected = selectedEmployeeLabel === emp.label;
+            const count = employeeStatsMap[emp.label] || 0;
+
+            return (
+              <button
+                key={emp.label}
+                type="button"
+                onClick={() => setSelectedEmployeeLabel(emp.label)}
+                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                  isSelected
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/40'
+                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`font-mono font-black text-sm px-2 py-0.5 rounded-lg ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-blue-700'
+                    }`}
+                  >
+                    {emp.label}
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {count} tkts
+                  </span>
+                </div>
+                <div className="mt-2">
+                  <div className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
+                    {emp.name}
+                  </div>
+                  <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
+                    Active Staff
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Summary Cards for Selected Employee */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+            Customers ({selectedEmployeeLabel})
+          </div>
+          <div className="text-xl font-black text-slate-900 mt-0.5">{summaryTotals.customers}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Under {selectedEmployeeLabel}</div>
         </div>
 
-        {/* Search */}
-        <div className="relative w-full sm:w-64">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <div className="bg-white p-3 rounded-xl border border-blue-200 bg-blue-50/20 shadow-2xs">
+          <div className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider">
+            Total Tickets
+          </div>
+          <div className="text-xl font-black text-blue-700 mt-0.5">{summaryTotals.tickets}</div>
+          <div className="text-[10px] text-blue-600/70 mt-0.5">Booked &amp; Paid</div>
+        </div>
+
+        <div className="bg-white p-3 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-2xs">
+          <div className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
+            Half Sets
+          </div>
+          <div className="text-xl font-black text-emerald-700 mt-0.5">{summaryTotals.halfs}</div>
+          <div className="text-[10px] text-emerald-600/70 mt-0.5">₹300 Package</div>
+        </div>
+
+        <div className="bg-white p-3 rounded-xl border border-purple-200 bg-purple-50/20 shadow-2xs">
+          <div className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">
+            Full Sets
+          </div>
+          <div className="text-xl font-black text-purple-700 mt-0.5">{summaryTotals.fulls}</div>
+          <div className="text-[10px] text-purple-600/70 mt-0.5">₹570 Package</div>
+        </div>
+      </div>
+
+      {/* Search and Export Bar */}
+      <div className="bg-white rounded-xl border border-slate-200 p-2.5 flex flex-col sm:flex-row items-center justify-between gap-2.5 shadow-2xs">
+        <div className="relative flex-1 w-full">
+          <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search ticket #..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            placeholder={`Search customer name, phone, or ticket # under ${selectedEmployeeLabel}...`}
+            className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:border-blue-600 font-medium"
           />
         </div>
+
+        <button
+          type="button"
+          onClick={handleExportCsv}
+          disabled={selectedEmployeeRows.length === 0 || isExportingCsv}
+          className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span>Export {selectedEmployeeLabel} CSV</span>
+        </button>
       </div>
 
-      {/* Task List / Table */}
+      {/* The Requested 6-Column Employee Report Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-        {displayedList.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 text-xs">
-            {activeTab === 'pending'
-              ? 'No pending payment tasks requiring action for this draw date.'
-              : 'No completed payment tasks recorded for this draw date.'}
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/60 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="font-mono font-bold text-xs bg-blue-600 text-white px-2 py-0.5 rounded">
+              {selectedEmployeeLabel}
+            </span>
+            <span className="text-xs font-bold text-slate-800">
+              Customer Bookings &amp; Payment Records
+            </span>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+          <span className="text-xs text-slate-500">
+            <strong>{selectedEmployeeRows.length}</strong> customers listed
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          {selectedEmployeeRows.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 text-xs">
+              No paid or booked customers found under <strong>{selectedEmployeeLabel}</strong> for draw date {drawDate}.
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="bg-slate-50 text-[11px] font-bold text-slate-600 uppercase border-b border-slate-200">
                 <tr>
-                  <th className="py-2.5 px-4">Ticket Number</th>
-                  <th className="py-2.5 px-4">Draw Date</th>
-                  <th className="py-2.5 px-4">Staff / Created By</th>
-                  <th className="py-2.5 px-4">Total Amount</th>
-                  <th className="py-2.5 px-4">Amount Paid</th>
-                  <th className="py-2.5 px-4">Amount Due</th>
-                  <th className="py-2.5 px-4">Payment Status</th>
-                  <th className="py-2.5 px-4">Task Status</th>
-                  <th className="py-2.5 px-4 text-right">Action</th>
+                  <th className="py-3 px-3.5">Employee ID</th>
+                  <th className="py-3 px-3.5">Customer Name</th>
+                  <th className="py-3 px-3.5">Booked Ticket Numbers</th>
+                  <th className="py-3 px-3.5 text-center">Number of Tickets</th>
+                  <th className="py-3 px-3.5 text-center">Number of Half Set</th>
+                  <th className="py-3 px-3.5 text-center">Number of Full Set</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 font-mono text-slate-700">
-                {displayedList.map((task) => (
-                  <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3 px-4 font-bold text-slate-900">
-                      <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded font-bold border border-slate-200">
-                        #{task.ticketNumber}
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {selectedEmployeeRows.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                    {/* 1. Employee ID */}
+                    <td className="py-3 px-3.5">
+                      <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                        {row.employeeId}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-slate-600 font-sans">{task.drawDate}</td>
-                    <td className="py-3 px-4 font-sans">
-                      {currentRole === 'admin' ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300">
-                          {task.employeeLabel || 'L1'} — {employeeLabelMap?.[task.employeeLabel || 'L1'] || 'Employee'}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                          {task.employeeLabel || 'L1'}
-                        </span>
-                      )}
+
+                    {/* 2. Customer Name */}
+                    <td className="py-3 px-3.5">
+                      <div className="font-bold text-slate-900">{row.customerName}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{row.customerPhone}</div>
                     </td>
-                    <td className="py-3 px-4 font-sans font-semibold text-slate-800">
-                      ₹{task.totalAmount}
+
+                    {/* 3. Booked Ticket Numbers */}
+                    <td className="py-3 px-3.5">
+                      <div className="flex flex-wrap gap-1 max-w-xs sm:max-w-md">
+                        {row.ticketNumbers.map((tNum) => (
+                          <span
+                            key={tNum}
+                            className="font-mono font-bold text-xs bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded border border-slate-200"
+                          >
+                            {tNum}
+                          </span>
+                        ))}
+                      </div>
                     </td>
-                    <td className="py-3 px-4 font-sans font-semibold text-emerald-700">
-                      ₹{task.amountPaid}
-                    </td>
-                    <td className="py-3 px-4 font-sans font-bold text-red-600">
-                      ₹{task.amountDue}
-                    </td>
-                    <td className="py-3 px-4 font-sans">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          task.paymentStatus === 'Paid'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                            : task.paymentStatus === 'Partial'
-                            ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                            : 'bg-amber-100 text-amber-800 border border-amber-200'
-                        }`}
-                      >
-                        {task.paymentStatus}
+
+                    {/* 4. Number of Tickets */}
+                    <td className="py-3 px-3.5 text-center font-bold text-slate-900">
+                      <span className="px-2 py-0.5 rounded-full bg-slate-100 font-mono text-xs">
+                        {row.ticketCount}
                       </span>
                     </td>
-                    <td className="py-3 px-4 font-sans">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          task.status === 'COMPLETED'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-amber-50 text-amber-700 border border-amber-200'
-                        }`}
-                      >
-                        {task.status}
-                      </span>
+
+                    {/* 5. Number of Half Set */}
+                    <td className="py-3 px-3.5 text-center font-bold text-emerald-700 font-mono">
+                      {row.halfSetCount}
                     </td>
-                    <td className="py-3 px-4 text-right font-sans">
-                      {task.status === 'PENDING' ? (
-                        <button
-                          onClick={() => handleOpenCompleteModal(task)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs transition-colors inline-flex items-center space-x-1"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Mark Completed</span>
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 font-medium">
-                          Completed {task.completedBy ? `by ${task.completedBy}` : ''}
-                        </span>
-                      )}
+
+                    {/* 6. Number of Full Set */}
+                    <td className="py-3 px-3.5 text-center font-bold text-purple-700 font-mono">
+                      {row.fullSetCount}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
-      </div>
-
-      {/* Completion Modal */}
-      {completingTask && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-150 backdrop-blur-2xs">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <h3 className="font-bold text-slate-900 text-sm">
-                  Complete Payment Verification
-                </h3>
-              </div>
-              <button
-                onClick={() => setCompletingTask(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 text-xs">
-              {actionError && (
-                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 font-semibold">
-                  {actionError}
-                </div>
-              )}
-
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 font-mono">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-sans">Ticket:</span>
-                  <span className="font-bold text-slate-900">#{completingTask.ticketNumber}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-sans">Staff:</span>
-                  <span className="font-bold text-slate-800 font-sans">
-                    {currentRole === 'admin'
-                      ? `${completingTask.employeeLabel || 'L1'} — ${employeeLabelMap?.[completingTask.employeeLabel || 'L1'] || 'Employee'}`
-                      : (completingTask.employeeLabel || 'L1')}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-sans">Draw Date:</span>
-                  <span className="text-slate-800 font-sans">{completingTask.drawDate}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-sans">Amount Due:</span>
-                  <span className="font-bold text-red-600">₹{completingTask.amountDue}</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">
-                  Payment Method
-                </label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full p-2 rounded-lg border border-slate-200 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                >
-                  <option value="Cash">Cash</option>
-                  <option value="Online Transfer">Online Transfer</option>
-                  <option value="Cheque">Cheque</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">
-                  Payment Reference / Receipt ID
-                </label>
-                <input
-                  type="text"
-                  value={paymentRef}
-                  onChange={(e) => setPaymentRef(e.target.value)}
-                  placeholder="e.g. REC-12345"
-                  className="w-full p-2 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-
-              <p className="text-[11px] text-slate-400">
-                Completing this task will record the payment securely server-side and update the booking status to Paid.
-              </p>
-            </div>
-
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => setCompletingTask(null)}
-                disabled={isSubmitting}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmSubmit}
-                disabled={isSubmitting}
-                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs transition-colors flex items-center space-x-1 disabled:opacity-50"
-              >
-                {isSubmitting ? (
-                  <>
-                    <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Confirm Completed</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 };

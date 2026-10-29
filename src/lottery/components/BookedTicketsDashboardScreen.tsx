@@ -74,6 +74,15 @@ interface BookedTicketsDashboardProps {
   onSearchTicket?: (queryStr: string) => void;
 }
 
+// Helper to enforce canonical pricing: Half Set ₹300, Full Set ₹570, Both ₹870
+const getBookingAmount = (b: TicketBooking): number => {
+  if (b.halfSelected && b.fullSelected) return 870;
+  if (b.fullSelected || b.ticketType === 'full') return 570;
+  if (b.halfSelected || b.ticketType === 'half') return 300;
+  if (b.totalAmount && b.totalAmount > 75) return b.totalAmount;
+  return 570;
+};
+
 export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps> = ({
   config,
   allBookings = [],
@@ -245,22 +254,36 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
   };
 
   const allFilteredBookings = filterBookingList(allBookings);
-  const effectivePendingList = pendingBookings.length > 0
-    ? pendingBookings
-    : allBookings.filter((b) => b.bookingStatus === 'Pending Confirmation');
+  const effectivePendingList = allBookings.filter((b) => b.bookingStatus === 'Pending Confirmation');
   const filteredPendingList = filterBookingList(effectivePendingList);
 
-  const effectiveConfirmedList = paidBookings.length > 0 || unpaidBookings.length > 0
-    ? [...paidBookings, ...unpaidBookings.filter(b => b.bookingStatus === 'Booked')]
-    : allBookings.filter((b) => b.bookingStatus === 'Booked');
+  const effectiveConfirmedList = allBookings.filter((b) => b.bookingStatus === 'Booked');
   const filteredConfirmedList = filterBookingList(effectiveConfirmedList);
 
+  // Set of ticket numbers that are currently booked or pending confirmation for the current draw date
+  const bookedOrPendingNumbers = new Set(
+    allBookings
+      .filter((b) => b.bookingStatus === 'Booked' || b.bookingStatus === 'Pending Confirmation')
+      .map((b) => b.ticketNumber)
+  );
+
   // Inventory stats for selected draw date
-  const totalPublished = inventoryTickets.length;
-  const availableCount = inventoryTickets.filter((t) => t.bookingStatus === 'Available' && t.status === 'PUBLISHED').length;
+  const totalPublished = inventoryTickets.filter((t) => t.status === 'PUBLISHED').length;
+  const availableCount = inventoryTickets.filter(
+    (t) =>
+      t.status === 'PUBLISHED' &&
+      t.bookingStatus !== 'Booked' &&
+      t.bookingStatus !== 'Pending Confirmation' &&
+      !bookedOrPendingNumbers.has(t.ticketNumber)
+  ).length;
   const bookedCount = allBookings.filter((b) => b.bookingStatus === 'Booked').length;
   const pendingCount = effectivePendingList.length;
-  const paidCountActual = allBookings.filter((b) => b.paymentStatus === 'Paid').length;
+  const paidCountActual = allBookings.filter(
+    (b) =>
+      b.bookingStatus === 'Booked' &&
+      b.paymentStatus === 'Paid' &&
+      (b.remainingBalance === 0 || b.amountPaid >= b.totalAmount)
+  ).length;
 
   // Actions
   const handleConfirmPending = async (bookingId: string) => {
@@ -443,22 +466,6 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
         </div>
 
         <div className="flex items-center space-x-2 self-start sm:self-auto flex-wrap gap-2">
-          {currentRole === 'admin' && (
-            <button
-              onClick={() => {
-                setReportFeedback(null);
-                setReportSpecificDate(config.businessDate);
-                setReportStartDate(config.businessDate);
-                setReportEndDate(config.businessDate);
-                setIsCustomerReportModalOpen(true);
-              }}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center space-x-1.5 transition-colors shadow-2xs cursor-pointer"
-              title="Download All Customer Details as PDF"
-            >
-              <FileDown className="w-3.5 h-3.5" />
-              <span>Download Customer Report (PDF)</span>
-            </button>
-          )}
           <div className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 flex items-center space-x-1.5">
             <Calendar className="w-3.5 h-3.5 text-slate-500" />
             <span>Draw: <strong className="text-slate-900">{config.businessDate}</strong></span>
@@ -467,7 +474,7 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
       </div>
 
       {/* Real-time Inventory Summary Banner */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
           <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Published</div>
           <div className="text-xl font-black text-slate-900 mt-0.5">{totalPublished}</div>
@@ -487,11 +494,6 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
           <div className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider">Confirmed</div>
           <div className="text-xl font-black text-blue-700 mt-0.5">{bookedCount}</div>
           <div className="text-[10px] text-blue-600/70 mt-0.5">Officially booked</div>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-purple-200 bg-purple-50/20 shadow-2xs col-span-2 sm:col-span-1">
-          <div className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">Paid in Full</div>
-          <div className="text-xl font-black text-purple-700 mt-0.5">{paidCountActual}</div>
-          <div className="text-[10px] text-purple-600/70 mt-0.5">Settled balance</div>
         </div>
       </div>
 
@@ -566,31 +568,16 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
             {winners.length + papers.length}
           </span>
         </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('presets')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center space-x-1.5 ${
-            activeTab === 'presets' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <Sliders className="w-3.5 h-3.5" />
-          <span>Weekly Presets</span>
-          <span className="text-[10px] px-1.5 py-0.2 rounded font-bold bg-emerald-600/30 text-white">
-            7 Days
-          </span>
-        </button>
       </div>
 
       {/* Global Filter Bar (Available on Tables) */}
-      {activeTab !== 'presets' && (
-        <div className="relative">
+      <div className="relative">
           <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
             <Search className="w-4 h-4" />
           </div>
           <input
             type="text"
-            placeholder="Search by Customer ID (#5316), Customer Name, Phone, Employee, or Ticket #..."
+            placeholder="Search by Ticket #, Customer Name, Phone, or Employee..."
             value={searchTicket}
             onChange={(e) => setSearchTicket(e.target.value)}
             className="w-full pl-10 pr-24 py-2 text-xs bg-white border border-slate-200 rounded-lg shadow-2xs focus:outline-none focus:border-slate-900 font-medium text-slate-800"
@@ -605,7 +592,6 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
             </button>
           )}
         </div>
-      )}
 
       {/* TAB 1: SUMMARY (ALL BOOKINGS) */}
       {activeTab === 'summary' && (
@@ -641,46 +627,41 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 uppercase tracking-wider whitespace-nowrap sticky top-0">
                 <tr>
-                  <th className="py-2.5 px-3">Customer ID</th>
                   <th className="py-2.5 px-3">Ticket #</th>
+                  <th className="py-2.5 px-3">Set Type</th>
                   <th className="py-2.5 px-3">Customer</th>
                   <th className="py-2.5 px-3">Draw Date</th>
                   <th className="py-2.5 px-3">Booked By</th>
+                  <th className="py-2.5 px-3 text-center">Amount</th>
                   <th className="py-2.5 px-3 text-center">Booking Status</th>
                   <th className="py-2.5 px-3 text-center">Payment</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {allFilteredBookings.map((b) => {
-                  const cid = b.customerId || '#5101';
                   const isConfirmed = b.bookingStatus === 'Booked';
                   const isPaid = b.paymentStatus === 'Paid';
                   return (
                     <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2 px-3 whitespace-nowrap">
-                        <div className="inline-flex items-center space-x-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setSearchTicket(cid)}
-                            className="font-mono font-bold text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
-                          >
-                            {cid}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyCode(cid)}
-                            className="p-1 text-slate-400 hover:text-slate-700 rounded"
-                            title="Copy Customer ID"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                          {copiedId === cid && <span className="text-[10px] font-bold text-emerald-600">Copied</span>}
-                        </div>
-                      </td>
-                      <td className="py-2 px-3 whitespace-nowrap">
                         <span className="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-200">
                           #{b.ticketNumber}
                         </span>
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        {b.halfSelected && b.fullSelected ? (
+                          <span className="font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded text-[11px]">
+                            Both (Half + Full)
+                          </span>
+                        ) : b.halfSelected ? (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[11px]">
+                            Half Set
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[11px]">
+                            Full Set
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 px-3">
                         <div className="font-semibold text-slate-900">{b.customerName || 'Walk-in Customer'}</div>
@@ -689,6 +670,9 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
                       <td className="py-2 px-3 whitespace-nowrap text-slate-600">{b.date}</td>
                       <td className="py-2 px-3 whitespace-nowrap text-slate-600">
                         {b.bookedByUsername || b.bookedBy}
+                      </td>
+                      <td className="py-2 px-3 text-center whitespace-nowrap font-mono font-bold text-xs text-slate-900">
+                        ₹{getBookingAmount(b)}
                       </td>
                       <td className="py-2 px-3 text-center whitespace-nowrap">
                         <span
@@ -744,10 +728,11 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
               <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 uppercase tracking-wider whitespace-nowrap sticky top-0">
                 <tr>
                   <th className="py-2.5 px-3">Ticket #</th>
-                  <th className="py-2.5 px-3">Customer ID</th>
+                  <th className="py-2.5 px-3">Set Type</th>
                   <th className="py-2.5 px-3">Customer Name</th>
                   <th className="py-2.5 px-3">Draw Date</th>
                   <th className="py-2.5 px-3">Employee</th>
+                  <th className="py-2.5 px-3 text-center">Amount</th>
                   <th className="py-2.5 px-3">Booking Time</th>
                   <th className="py-2.5 px-3 text-center">Status</th>
                   <th className="py-2.5 px-3 text-center">Actions</th>
@@ -762,7 +747,19 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
                       </span>
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
-                      <span className="font-mono font-bold text-xs text-blue-700">{b.customerId || '#5101'}</span>
+                      {b.halfSelected && b.fullSelected ? (
+                        <span className="font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded text-[11px]">
+                          Both (Half + Full)
+                        </span>
+                      ) : b.halfSelected ? (
+                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[11px]">
+                          Half Set
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[11px]">
+                          Full Set
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="font-semibold text-slate-900">{b.customerName || 'Walk-in Customer'}</div>
@@ -771,6 +768,9 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
                     <td className="py-2.5 px-3 whitespace-nowrap text-slate-600">{b.date}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap text-slate-700">
                       {b.bookedByUsername || b.bookedBy}
+                    </td>
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap font-mono font-bold text-xs text-slate-900">
+                      ₹{getBookingAmount(b)}
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap text-[11px] text-slate-500">
                       {b.bookedAt ? new Date(b.bookedAt).toLocaleTimeString() : 'N/A'}
@@ -833,7 +833,6 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
               <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 uppercase tracking-wider whitespace-nowrap sticky top-0">
                 <tr>
                   <th className="py-2.5 px-3">Ticket #</th>
-                  <th className="py-2.5 px-3">Customer ID</th>
                   <th className="py-2.5 px-3">Customer</th>
                   <th className="py-2.5 px-3">Draw Date</th>
                   <th className="py-2.5 px-3 text-right">Total / Paid</th>
@@ -846,7 +845,8 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {filteredConfirmedList.map((b) => {
                   const isPaid = b.paymentStatus === 'Paid';
-                  const remaining = b.remainingBalance !== undefined ? b.remainingBalance : (b.totalAmount - (b.amountPaid || 0));
+                  const total = getBookingAmount(b);
+                  const remaining = isPaid ? 0 : (b.remainingBalance !== undefined && b.totalAmount > 75 ? b.remainingBalance : Math.max(0, total - (b.amountPaid || 0)));
                   return (
                     <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2.5 px-3 whitespace-nowrap">
@@ -854,16 +854,13 @@ export const BookedTicketsDashboardScreen: React.FC<BookedTicketsDashboardProps>
                           #{b.ticketNumber}
                         </span>
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        <span className="font-mono font-bold text-xs text-blue-700">{b.customerId || '#5101'}</span>
-                      </td>
                       <td className="py-2.5 px-3">
                         <div className="font-semibold text-slate-900">{b.customerName || 'Walk-in Customer'}</div>
                         {b.customerPhone && <div className="text-[10px] text-slate-500">{b.customerPhone}</div>}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap text-slate-600">{b.date}</td>
                       <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono">
-                        ₹{b.totalAmount} / <strong className="text-emerald-700">₹{b.amountPaid || 0}</strong>
+                        ₹{total} / <strong className="text-emerald-700">₹{b.amountPaid || 0}</strong>
                       </td>
                       <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono font-bold">
                         {remaining > 0 ? (

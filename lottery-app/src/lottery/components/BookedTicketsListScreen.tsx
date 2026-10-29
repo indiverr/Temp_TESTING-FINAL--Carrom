@@ -73,7 +73,7 @@ export const BookedTicketsListScreen: React.FC<BookedTicketsListScreenProps> = (
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by Customer ID (#5316), ticket # or name..."
+            placeholder="Search by ticket #, customer name, or phone..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 font-semibold text-slate-800"
@@ -95,7 +95,6 @@ export const BookedTicketsListScreen: React.FC<BookedTicketsListScreenProps> = (
           <thead className="bg-sky-100/70 text-slate-800 font-black border-b border-slate-200 text-[11px] sticky top-0 z-10">
             <tr>
               <th className="py-2.5 px-2">S. No</th>
-              <th className="py-2.5 px-2">Cust ID</th>
               <th className="py-2.5 px-2">Ticket #</th>
               <th className="py-2.5 px-2">Name</th>
               <th className="py-2.5 px-2">Status</th>
@@ -105,30 +104,9 @@ export const BookedTicketsListScreen: React.FC<BookedTicketsListScreenProps> = (
           <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
             {filtered.map((item, idx) => {
               const isItemPaid = item.paymentStatus === 'Paid';
-              const cid = item.customerId || '#5101';
               return (
                 <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="py-2.5 px-2 font-bold text-slate-600">{idx + 1}</td>
-                  <td className="py-2.5 px-2 whitespace-nowrap">
-                    <div className="inline-flex items-center space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => setSearchQuery(cid)}
-                        className="font-mono font-bold text-[11px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200"
-                        title="Filter by Customer ID"
-                      >
-                        {cid}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyCode(cid)}
-                        className="p-0.5 text-slate-400 hover:text-slate-700"
-                        title="Copy Customer ID"
-                      >
-                        <Copy className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  </td>
                   <td className="py-2.5 px-2 font-black font-mono text-slate-900">
                     {item.ticketNumber}
                   </td>
@@ -187,12 +165,6 @@ export const BookedTicketsListScreen: React.FC<BookedTicketsListScreenProps> = (
                   <span className="w-28 text-slate-600 font-bold">Ticket Number :</span>
                   <span className="font-mono font-black text-blue-700 text-sm">
                     {payingTicket.ticketNumber}
-                  </span>
-                </div>
-                <div className="flex border-b border-slate-200 p-2">
-                  <span className="w-28 text-slate-600 font-bold">Customer ID :</span>
-                  <span className="font-mono font-extrabold text-blue-700">
-                    {payingTicket.customerId || '#5101'}
                   </span>
                 </div>
                 <div className="flex border-b border-slate-200 p-2">

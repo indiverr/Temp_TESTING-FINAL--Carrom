@@ -44,7 +44,9 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
   onConfirmPendingBooking,
   onBack,
 }) => {
-  const [queueTab, setQueueTab] = useState<'unpaid' | 'pending'>('unpaid');
+  const [queueTab, setQueueTab] = useState<'unpaid' | 'pending'>(
+    currentRole === 'employee' ? 'pending' : 'unpaid'
+  );
   const [confirmingBookingId, setConfirmingBookingId] = useState<string | null>(null);
   const [confirmSuccessMsg, setConfirmSuccessMsg] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
@@ -66,6 +68,15 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
   const [selectedBookingForCancel, setSelectedBookingForCancel] = useState<TicketBooking | null>(null);
   const [cancelReason, setCancelReason] = useState('Customer requested cancellation');
 
+  const getBookingAmount = (b: { halfSelected?: boolean; fullSelected?: boolean; ticketType?: string; totalAmount?: number }) => {
+    const isBoth = (b.halfSelected && b.fullSelected) || b.ticketType === 'both';
+    if (isBoth) return 870;
+    if (b.fullSelected || b.ticketType === 'full') return 570;
+    if (b.halfSelected || b.ticketType === 'half') return 300;
+    if (b.totalAmount && b.totalAmount > 75) return b.totalAmount;
+    return 570;
+  };
+
   const handleCopyCode = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
@@ -77,8 +88,12 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
     }
   };
 
-  // Filtered bookings: search by Customer ID (#5316 or 5316), customer name, username, phone, or ticket #
-  const filtered = unpaidBookings.filter((item) => {
+  // Determine active source list based on role and tab
+  const isPendingView = currentRole === 'employee' || queueTab === 'pending';
+  const sourceList = isPendingView ? pendingBookings : unpaidBookings;
+
+  // Filtered bookings: search by ticket #, customer name, username, or phone
+  const filtered = sourceList.filter((item) => {
     const q = searchQuery.trim().toLowerCase();
     const qDigits = q.replace(/^#/, '');
     const cid = String(item.customerId || '').toLowerCase();
@@ -159,14 +174,14 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
           <div>
             <div className="flex items-center space-x-2">
               <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                Pending Bookings
+                {isPendingView ? 'Pending Bookings' : 'Unpaid Bookings'}
               </h1>
               <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                {unpaidBookings.length}
+                {filtered.length}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Review and confirm pending ticket bookings by Customer ID, name, username, or contact
+              Review and confirm pending ticket bookings by ticket #, customer name, username, or phone
             </p>
           </div>
         </div>
@@ -232,7 +247,7 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by Customer ID (#5316), customer name, username, phone, or ticket #..."
+            placeholder="Search by Ticket #, customer name, username, or phone..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900 font-medium text-slate-800"
@@ -315,11 +330,11 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
               </p>
             </div>
             <span className="text-xs font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 rounded-full">
-              {pendingBookings.length} Pending
+              {filtered.length} Pending
             </span>
           </div>
 
-          {pendingBookings.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className="py-12 text-center text-slate-400">
               <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-slate-300" />
               <p className="text-xs font-semibold text-slate-500">No pending confirmation requests</p>
@@ -331,7 +346,6 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                 <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="py-3 px-4 text-center w-12">#</th>
-                    <th className="py-3 px-4">Customer ID</th>
                     <th className="py-3 px-4">Customer Details</th>
                     <th className="py-3 px-4 text-center">Ticket</th>
                     <th className="py-3 px-4 text-center">Type</th>
@@ -341,14 +355,9 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
-                  {pendingBookings.map((item, idx) => (
+                  {filtered.map((item, idx) => (
                     <tr key={item.id} className="hover:bg-amber-50/30 transition-colors">
                       <td className="py-3 px-4 text-slate-400 text-center">{idx + 1}</td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="font-mono font-bold text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
-                          {item.customerId || '#5316'}
-                        </span>
-                      </td>
                       <td className="py-3 px-4">
                         <div className="font-bold text-slate-900">{item.customerName}</div>
                         <div className="text-slate-500 text-xs flex items-center space-x-1 mt-0.5">
@@ -374,31 +383,38 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                         )}
                       </td>
                       <td className="py-3 px-4 text-center font-bold text-slate-900 font-mono">
-                        ₹{item.totalAmount}
+                        ₹{getBookingAmount(item)}
                       </td>
                       <td className="py-3 px-4 text-center text-xs text-slate-600">
                         <div className="font-semibold text-slate-800">{item.bookedBy}</div>
                         <div className="text-[10px] text-slate-400">{item.bookedAt}</div>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <button
-                          disabled={confirmingBookingId === item.id}
-                          onClick={async () => {
-                            if (!onConfirmPendingBooking) return;
-                            setConfirmingBookingId(item.id);
-                            try {
-                              await onConfirmPendingBooking(item.id);
-                              setConfirmSuccessMsg(`Confirmed Ticket #${item.ticketNumber} for ${item.customerName} (${item.customerId || '#5316'})`);
-                              setTimeout(() => setConfirmSuccessMsg(null), 3500);
-                            } finally {
-                              setConfirmingBookingId(null);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold shadow-xs transition-colors inline-flex items-center space-x-1"
-                        >
-                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>{confirmingBookingId === item.id ? 'Confirming...' : 'Confirm'}</span>
-                        </button>
+                        {currentRole === 'employee' ? (
+                          <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 inline-flex items-center space-x-1">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            <span>Awaiting Confirmation</span>
+                          </span>
+                        ) : (
+                          <button
+                            disabled={confirmingBookingId === item.id}
+                            onClick={async () => {
+                              if (!onConfirmPendingBooking) return;
+                              setConfirmingBookingId(item.id);
+                              try {
+                                await onConfirmPendingBooking(item.id);
+                                setConfirmSuccessMsg(`Confirmed Ticket #${item.ticketNumber} for ${item.customerName} (${item.customerId || '#5316'})`);
+                                setTimeout(() => setConfirmSuccessMsg(null), 3500);
+                              } finally {
+                                setConfirmingBookingId(null);
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold shadow-xs transition-colors inline-flex items-center space-x-1"
+                          >
+                            <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                            <span>{confirmingBookingId === item.id ? 'Confirming...' : 'Confirm'}</span>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -414,7 +430,6 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
             <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider whitespace-nowrap">
               <tr>
                 <th className="py-3 px-4 text-center">S.No</th>
-                <th className="py-3 px-4">Customer ID</th>
                 <th className="py-3 px-4">Customer</th>
                 <th className="py-3 px-4 text-center">Ticket #</th>
                 <th className="py-3 px-4 text-center">Set Type</th>
@@ -424,34 +439,10 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
               {filtered.map((item, idx) => {
-                const customerId = item.customerId || '#5101';
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="py-3 px-4 text-slate-500 text-center">
                       {idx + 1}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="inline-flex items-center space-x-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setSearchQuery(customerId)}
-                          className="font-mono font-bold text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
-                          title="Show all bookings for this Customer ID"
-                        >
-                          {customerId}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCopyCode(customerId)}
-                          className="p-1 text-slate-400 hover:text-slate-700 rounded"
-                          title="Copy Customer ID"
-                        >
-                          <Copy className="w-3 h-3" />
-                        </button>
-                        {copiedId === customerId && (
-                          <span className="text-[10px] font-bold text-emerald-600">Copied</span>
-                        )}
-                      </div>
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-semibold text-slate-900">{item.customerName}</div>
@@ -554,15 +545,15 @@ export const UnpaidTicketsScreen: React.FC<UnpaidTicketsScreenProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Customer ID:</span>
-                  <span className="font-mono font-bold text-blue-700">
-                    {selectedBookingForPay.customerId || '#5101'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
                   <span className="text-slate-500">Customer:</span>
                   <span className="font-semibold text-slate-900">
                     {selectedBookingForPay.customerName}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Amount:</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    ₹{getBookingAmount(selectedBookingForPay)}
                   </span>
                 </div>
                 <div className="flex justify-between">

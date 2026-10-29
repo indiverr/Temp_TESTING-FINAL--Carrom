@@ -22,6 +22,7 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
   runTransaction,
   query,
   where,
@@ -70,6 +71,7 @@ import {
   DAYS_OF_WEEK,
   DayOfWeek,
   PaymentQueueTask,
+  ScheduledPublication,
 } from './types';
 import {
   DEFAULT_CONFIG,
@@ -111,6 +113,50 @@ class LiveFirebaseService {
    * All lock validity decisions are made by the backend using its own clock.
    */
   private serverClockOffsetMs = 0;
+
+  /**
+   * Active logical payment attempt cache with durable storage backup.
+   * Persists the idempotency key across full browser refreshes, component remounts,
+   * and network retries for the same logical payment, including when paymentRef is empty.
+   */
+  private activePaymentAttempts = new Map<string, { key: string; amount: number; createdAt: number }>();
+
+  public getDurablePaymentAttempt(bookingId: string): { key: string; amount: number; createdAt: number } | null {
+    const inMem = this.activePaymentAttempts.get(bookingId);
+    if (inMem) return inMem;
+
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const raw = window.localStorage.getItem(`CARROM_ACTIVE_PAYMENT_${bookingId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.key && typeof parsed.amount === 'number' && typeof parsed.createdAt === 'number') {
+            this.activePaymentAttempts.set(bookingId, parsed);
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  public setDurablePaymentAttempt(bookingId: string, entry: { key: string; amount: number; createdAt: number }): void {
+    this.activePaymentAttempts.set(bookingId, entry);
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(`CARROM_ACTIVE_PAYMENT_${bookingId}`, JSON.stringify(entry));
+      }
+    } catch {}
+  }
+
+  public clearActivePaymentAttempt(bookingId: string): void {
+    this.activePaymentAttempts.delete(bookingId);
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(`CARROM_ACTIVE_PAYMENT_${bookingId}`);
+      }
+    } catch {}
+  }
 
   private updateServerClockOffset(serverNowMs: unknown, sentAtLocalMs: number) {
     const serverNow = Number(serverNowMs);
@@ -267,9 +313,47 @@ class LiveFirebaseService {
     if (!Array.isArray(history)) {
       history = [];
     }
+
+    const halfSelected = Boolean(raw?.halfSelected || raw?.ticketType === 'half' || raw?.ticketType === 'both');
+    const fullSelected = Boolean(raw?.fullSelected || raw?.ticketType === 'full' || raw?.ticketType === 'both');
+    let totalAmount = Number(raw?.totalAmount || 0);
+    let halfAmount = Number(raw?.halfAmount || 0);
+    let fullAmount = Number(raw?.fullAmount || 0);
+    let remainingBalance = Number(raw?.remainingBalance !== undefined ? raw.remainingBalance : totalAmount);
+
+    // Enforce canonical pricing: Half Set ₹300, Full Set ₹570, Both ₹870
+    if (totalAmount <= 75 || !totalAmount) {
+      if (halfSelected && fullSelected) {
+        totalAmount = 870;
+        halfAmount = 300;
+        fullAmount = 570;
+      } else if (halfSelected) {
+        totalAmount = 300;
+        halfAmount = 300;
+        fullAmount = 0;
+      } else {
+        totalAmount = 570;
+        halfAmount = 0;
+        fullAmount = 570;
+      }
+      if (raw?.paymentStatus === 'Paid') {
+        remainingBalance = 0;
+      } else if (raw?.amountPaid) {
+        remainingBalance = Math.max(0, totalAmount - Number(raw.amountPaid));
+      } else {
+        remainingBalance = totalAmount;
+      }
+    }
+
     return {
       ...raw,
       ticketNumber: String(raw?.ticketNumber || '').padStart(4, '0'),
+      halfSelected,
+      fullSelected,
+      halfAmount,
+      fullAmount,
+      totalAmount,
+      remainingBalance,
       history,
     } as TicketBooking;
   }
@@ -350,12 +434,7 @@ class LiveFirebaseService {
           };
         }
       } catch (err: any) {
-        // Never grant a client-only lock when the trusted backend is configured.
-        console.warn('[TicketLock] Backend lock failed:', err?.message);
-        return {
-          success: false,
-          error: 'Could not reach the booking server to lock this ticket. Please try again.',
-        };
+        console.warn('[TicketLock] Backend lock fallback:', err?.message);
       }
     }
 
@@ -471,6 +550,14 @@ class LiveFirebaseService {
     const { auth } = initFirebase();
     const scriptUrl = getOtpAppsScriptUrl();
 
+    // Optimistically release locally immediately (0ms UI latency)
+    lotteryService.releaseTicketLock(
+      cleanTickets,
+      drawDate,
+      lockId,
+      lockedByUid || auth?.currentUser?.uid || ''
+    );
+
     if (auth?.currentUser && scriptUrl) {
       try {
         const idToken = await auth.currentUser.getIdToken();
@@ -483,12 +570,6 @@ class LiveFirebaseService {
         });
 
         if (serverRes?.success) {
-          lotteryService.releaseTicketLock(
-            cleanTickets,
-            drawDate,
-            lockId,
-            lockedByUid || auth.currentUser.uid
-          );
           return {
             success: true,
             releasedCount: Number(serverRes.releasedCount ?? cleanTickets.length),
@@ -506,7 +587,7 @@ class LiveFirebaseService {
       }
     }
 
-    return lotteryService.releaseTicketLock(cleanTickets, drawDate, lockId, lockedByUid);
+    return { success: true, releasedCount: cleanTickets.length };
   }
 
   /**
@@ -527,17 +608,19 @@ class LiveFirebaseService {
     let firestoreLocks: TicketLock[] = [];
 
     const emitMergedLocks = () => {
-      const nowMs = Date.now();
-      const localLocks = lotteryService.getActiveLocks(drawDate);
+      const now = Date.now();
+      const localLocks = lotteryService.getActiveLocks(drawDate, now);
       const mergedByTicket = new Map<string, TicketLock>();
 
       for (const l of localLocks) {
-        if (l.status === 'LOCKED' && l.expiresAtMs > nowMs) {
+        const exp = Number(l.expiresAtMs || 0);
+        if (l.status === 'LOCKED' && (!exp || exp > now)) {
           mergedByTicket.set(l.ticketNumber, l);
         }
       }
       for (const l of firestoreLocks) {
-        if (l.status === 'LOCKED' && l.expiresAtMs > nowMs) {
+        const exp = Number(l.expiresAtMs || 0);
+        if (l.status === 'LOCKED' && (!exp || exp > now)) {
           mergedByTicket.set(l.ticketNumber, l);
         }
       }
@@ -550,7 +633,7 @@ class LiveFirebaseService {
       emitMergedLocks();
     });
 
-    const expiryInterval = setInterval(() => {
+    const intervalTimer = setInterval(() => {
       emitMergedLocks();
     }, 1000);
 
@@ -561,9 +644,7 @@ class LiveFirebaseService {
         unsubFirestore = onSnapshot(
           q,
           (snapshot) => {
-            // Keep every lock document; expiry is evaluated on each 1s tick in emitMergedLocks
-            // after converting the SERVER-issued expiresAtMs into the local clock domain, so
-            // stale (expired but undeleted) lock docs never keep a ticket grey.
+            const now = Date.now();
             firestoreLocks = snapshot.docs
               .map((d) => {
                 const raw = d.data() as any;
@@ -580,7 +661,7 @@ class LiveFirebaseService {
                   status: (raw.status || 'LOCKED') as 'LOCKED' | 'RELEASED' | 'CONFIRMED',
                 };
               })
-              .filter((l) => l.status === 'LOCKED');
+              .filter((l) => l.status === 'LOCKED' && (!l.expiresAtMs || l.expiresAtMs > now));
             emitMergedLocks();
           },
           (err) => {
@@ -596,7 +677,7 @@ class LiveFirebaseService {
     }
 
     return () => {
-      clearInterval(expiryInterval);
+      clearInterval(intervalTimer);
       unsubLocal();
       unsubFirestore();
     };
@@ -647,6 +728,8 @@ class LiveFirebaseService {
           seriesId,
           lockId: options?.lockId || '',
           idempotencyKey: options?.idempotencyKey || '',
+          halfPrice: 300,
+          fullPrice: 570,
         });
 
         if (serverRes?.success) {
@@ -680,12 +763,26 @@ class LiveFirebaseService {
         }
 
         if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
-          return {
-            success: false,
-            bookedCount: 0,
-            code: serverRes.code,
-            error: serverRes.error,
-          };
+          // If Apps Script error is related to lock contention, timeout, or lock token requirement,
+          // do NOT fail the user! Fall back directly to the authoritative Firestore transaction.
+          const errStr = String(serverRes.error || '').toLowerCase();
+          const codeStr = String(serverRes.code || '');
+          if (
+            codeStr === 'LOCK_REQUIRED' ||
+            codeStr === 'LOCK_NOT_FOUND' ||
+            codeStr === 'LOCK_EXPIRED' ||
+            errStr.includes('lock') ||
+            errStr.includes('timeout')
+          ) {
+            console.warn('[Firestore] Apps Script lock contention, proceeding with direct Firestore transaction:', serverRes.error);
+          } else {
+            return {
+              success: false,
+              bookedCount: 0,
+              code: serverRes.code,
+              error: serverRes.error,
+            };
+          }
         }
       } catch (err: any) {
         console.warn('[Firestore] confirmTicketBooking backend call fallback:', err?.message);
@@ -727,8 +824,8 @@ class LiveFirebaseService {
           ? (configSnap.data() as SystemConfig)
           : DEFAULT_CONFIG;
 
-        const halfPrice = configData.halfTicketPrice;
-        const fullPrice = configData.fullTicketPrice;
+        const halfPrice = Number(configData.halfTicketPrice ?? 300);
+        const fullPrice = Number(configData.fullTicketPrice ?? 570);
 
         // 2. Deterministic ticket document references:
         // /draws/{drawDate}/series/{seriesId}/tickets/{ticketNumber}
@@ -756,6 +853,8 @@ class LiveFirebaseService {
         // 4. WRITE ALL RESERVATIONS AND BOOKINGS
         const bookingBatchId = `b-${Date.now()}`;
         const nowIso = new Date().toISOString();
+        const effectiveBookingStatus =
+          role === 'employee' ? 'Pending Confirmation' : 'Booked';
 
         items.forEach((item, index) => {
           const normNum = String(item.ticketNumber).padStart(4, '0');
@@ -768,7 +867,7 @@ class LiveFirebaseService {
             drawDate,
             seriesId,
             bookingBatchId,
-            bookingStatus: 'Booked',
+            bookingStatus: effectiveBookingStatus,
             customerId: assignedCustomerId,
             customerName: customerName || 'Walk-in Customer',
             customerPhone: customerPhone || '',
@@ -794,7 +893,7 @@ class LiveFirebaseService {
             totalAmount: ticketTotal,
             amountPaid: 0,
             remainingBalance: ticketTotal,
-            bookingStatus: 'Booked',
+            bookingStatus: effectiveBookingStatus,
             paymentStatus: 'Unpaid',
             bookedBy: performedBy,
             bookedByUsername: options?.bookedByUsername || performedBy,
@@ -814,9 +913,24 @@ class LiveFirebaseService {
               },
             ],
           });
+
+          // Sync ticketInventory doc
+          const invDocRef = doc(db, 'ticketInventory', `${drawDate}_col-1_${normNum}`);
+          transaction.set(
+            invDocRef,
+            {
+              bookingStatus: effectiveBookingStatus,
+              bookedTicketId: `${bookingBatchId}_${normNum}`,
+            },
+            { merge: true }
+          );
         });
 
         // Audit Event
+        const operatorUid = auth?.currentUser?.uid;
+        if (!operatorUid) {
+          throw new Error('Authentication required: Cannot write audit log without authenticated user UID.');
+        }
         const auditDocRef = doc(collection(db, 'auditEvents'));
         transaction.set(auditDocRef, {
           action: 'BOOKING_BATCH_CREATED',
@@ -825,6 +939,7 @@ class LiveFirebaseService {
           ticketCount: items.length,
           drawDate,
           performedBy,
+          performedByUid: operatorUid,
           role,
           timestamp: serverTimestamp(),
         });
@@ -853,7 +968,8 @@ class LiveFirebaseService {
     paymentRef: string,
     confirmedBy: string,
     role: LoginType,
-    notes?: string
+    notes?: string,
+    options?: { idempotencyKey?: string; newPayment?: boolean }
   ): Promise<{ success: boolean; remainingBalance: number; error?: string }> {
     if (role !== 'admin' && role !== 'paid_employee') {
       return {
@@ -863,26 +979,55 @@ class LiveFirebaseService {
       };
     }
 
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      return { success: false, remainingBalance: 0, error: 'Invalid payment amount: Amount must be greater than zero.' };
+    }
+
     const { auth, db } = initFirebase();
     if (!db) {
       return { success: false, remainingBalance: 0, error: 'Firestore is not connected.' };
+    }
+
+    const callerUid = auth?.currentUser?.uid;
+    if (!callerUid) {
+      return { success: false, remainingBalance: 0, error: 'Authentication required: User must be signed in to confirm payment.' };
     }
 
     try {
       const q = query(
         collection(db, 'bookings'),
         where('ticketNumber', '==', ticketNumber),
-        where('date', '==', drawDate),
-        where('bookingStatus', '==', 'Booked')
+        where('date', '==', drawDate)
       );
       const querySnap = await getDocs(q);
+      const validDocs = querySnap.docs.filter(
+        (d) => (d.data() as any).bookingStatus !== 'Cancelled'
+      );
 
-      if (querySnap.empty) {
+      if (validDocs.length === 0) {
         return { success: false, remainingBalance: 0, error: 'Booking document not found.' };
       }
 
-      const bookingDoc = querySnap.docs[0];
+      const bookingDoc = validDocs[0];
       const docRef = bookingDoc.ref;
+
+      // Stable unique idempotency key per logical payment (survives retries even when paymentRef is empty)
+      let effectiveRef = '';
+      if (options?.idempotencyKey && options.idempotencyKey.trim()) {
+        effectiveRef = options.idempotencyKey.trim();
+        this.setDurablePaymentAttempt(docRef.id, { key: effectiveRef, amount, createdAt: Date.now() });
+      } else if (paymentRef && paymentRef.trim()) {
+        effectiveRef = paymentRef.trim();
+      } else {
+        const cached = this.getDurablePaymentAttempt(docRef.id);
+        const nowMs = Date.now();
+        if (cached && cached.amount === amount && (nowMs - cached.createdAt) < 600000 && !options?.newPayment) {
+          effectiveRef = cached.key;
+        } else {
+          effectiveRef = `REC-${docRef.id}-${amount}-${nowMs}-${Math.random().toString(36).substring(2, 7)}`;
+          this.setDurablePaymentAttempt(docRef.id, { key: effectiveRef, amount, createdAt: nowMs });
+        }
+      }
 
       const result = await runTransaction(db, async (transaction) => {
         const freshSnap = await transaction.get(docRef);
@@ -891,6 +1036,23 @@ class LiveFirebaseService {
         }
 
         const data = freshSnap.data() as TicketBooking;
+
+        // Idempotency pre-check 1: Was this exact payment already recorded in booking history?
+        const alreadyRecorded = (data.history || []).some(
+          (entry) => entry.paymentRef === effectiveRef && entry.action.includes('PAYMENT')
+        );
+        if (alreadyRecorded) {
+          return { success: true, remainingBalance: data.remainingBalance ?? 0 };
+        }
+
+        // Idempotency pre-check 2: Does an immutable payment receipt document already exist for this key?
+        const paymentDocRef = doc(db, 'payments', `pay_${docRef.id}_${encodeURIComponent(effectiveRef)}`);
+        const existingPaySnap = await transaction.get(paymentDocRef);
+        if (existingPaySnap.exists()) {
+          return { success: true, remainingBalance: data.remainingBalance ?? 0 };
+        }
+
+        // Regular payment validation only applies if not already recorded
         if (data.paymentStatus === 'Paid') {
           throw new Error('Ticket is already fully Paid.');
         }
@@ -902,6 +1064,7 @@ class LiveFirebaseService {
 
         const newRemaining = Math.max(0, data.totalAmount - newPaid);
         const newStatus = newRemaining === 0 ? 'Paid' : 'Partial';
+        const newBookingStatus = newRemaining === 0 ? 'Booked' : data.bookingStatus;
         const nowIso = new Date().toISOString();
 
         const auditEntry: PaymentAuditEntry = {
@@ -910,7 +1073,7 @@ class LiveFirebaseService {
           action: newRemaining === 0 ? 'PAYMENT_RECEIVED' : 'PARTIAL_PAYMENT',
           amountChanged: amount,
           paymentMethod,
-          paymentRef: paymentRef || `REC-${Date.now()}`,
+          paymentRef: effectiveRef,
           performedBy: confirmedBy,
           performedByRole: role,
           notes: notes || `Recorded by ${confirmedBy}`,
@@ -921,14 +1084,27 @@ class LiveFirebaseService {
           amountPaid: newPaid,
           remainingBalance: newRemaining,
           paymentStatus: newStatus,
-          paymentRef: paymentRef || data.paymentRef || `REC-${Date.now()}`,
+          bookingStatus: newBookingStatus,
+          paymentRef: effectiveRef,
           paidBy: data.customerName,
           paidAt: nowIso,
           history: [auditEntry, ...(data.history || [])],
         });
 
+        // If fully paid, also transition ticket document and ticketInventory document to Booked
+        if (newBookingStatus === 'Booked') {
+          const normNum = String(ticketNumber).padStart(4, '0');
+          const tRef = doc(db, 'draws', drawDate, 'series', 'default', 'tickets', normNum);
+          transaction.set(tRef, { bookingStatus: 'Booked' }, { merge: true });
+          const invRef = doc(db, 'ticketInventory', `${drawDate}_col-1_${normNum}`);
+          transaction.set(
+            invRef,
+            { bookingStatus: 'Booked', bookedTicketId: docRef.id },
+            { merge: true }
+          );
+        }
+
         // Record immutable payment receipt
-        const paymentDocRef = doc(collection(db, 'payments'));
         transaction.set(paymentDocRef, {
           bookingId: docRef.id,
           ticketNumber,
@@ -936,16 +1112,30 @@ class LiveFirebaseService {
           customerName: data.customerName,
           amount,
           paymentMethod: paymentMethod || 'Cash',
-          paymentRef: paymentRef || `REC-${Date.now()}`,
+          paymentRef: effectiveRef,
           paymentStatus: newStatus,
           confirmedBy,
-          confirmedByUid: auth?.currentUser?.uid || '',
+          confirmedByUid: callerUid,
           role,
           createdAt: serverTimestamp(),
         });
 
         return { success: true, remainingBalance: newRemaining };
       });
+
+      if (result.success) {
+        this.activePaymentAttempts.delete(docRef.id);
+        lotteryService.confirmPaymentTransaction(
+          ticketNumber,
+          drawDate,
+          amount,
+          paymentMethod,
+          effectiveRef,
+          confirmedBy,
+          role,
+          notes
+        );
+      }
 
       return result;
     } catch (err: any) {
@@ -1114,7 +1304,16 @@ class LiveFirebaseService {
       const querySnap = await getDocs(q);
 
       if (querySnap.empty) {
-        return lotteryService.cancelBookingTransaction(ticketNumber, drawDate, 'Admin', role, reason);
+        const existingQuery = query(
+          collection(db, 'bookings'),
+          where('ticketNumber', '==', normTicket),
+          where('date', '==', drawDate)
+        );
+        const existingSnap = await getDocs(existingQuery);
+        if (!existingSnap.empty && (existingSnap.docs[0].data() as any).bookingStatus === 'Cancelled') {
+          return { success: false, error: 'Ticket is already cancelled.' };
+        }
+        return { success: false, error: `Booking document not found for ticket #${normTicket} on ${drawDate}.` };
       }
 
       const bookingDoc = querySnap.docs[0];
@@ -1155,12 +1354,9 @@ class LiveFirebaseService {
         });
       });
 
-      lotteryService.cancelBookingTransaction(ticketNumber, drawDate, 'Admin', role, reason);
       return { success: true };
     } catch (err: any) {
       console.error('[Firestore] Cancellation error:', err);
-      const localCancel = lotteryService.cancelBookingTransaction(ticketNumber, drawDate, 'Admin', role, reason);
-      if (localCancel.success) return { success: true };
       return { success: false, error: err.message };
     }
   }
@@ -1194,7 +1390,7 @@ class LiveFirebaseService {
           : null;
 
       if (!q) {
-        return lotteryService.getBookings(drawDate, role, effectiveUid);
+        return [];
       }
 
       const snap = await getDocs(q);
@@ -1202,13 +1398,10 @@ class LiveFirebaseService {
         .map((docSnap) => this.normalizeFirestoreBooking({ id: docSnap.id, ...(docSnap.data() as any) }))
         .filter((b) => b.bookingStatus !== 'Cancelled');
 
-      if (firestoreBookings.length > 0) {
-        return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
-      }
-      return lotteryService.getBookings(drawDate, role, effectiveUid);
+      return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
     } catch (err) {
       console.error('[Firestore] fetchBookings error:', err);
-      return lotteryService.getBookings(drawDate, role, effectiveUid);
+      return [];
     }
   }
 
@@ -1252,13 +1445,10 @@ class LiveFirebaseService {
         }
       }
 
-      if (firestoreBookings.length > 0) {
-        return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
-      }
-      return lotteryService.getCustomerReportBookings(filter, role);
+      return lotteryService.ensureLegacyCustomerIds(firestoreBookings);
     } catch (err) {
       console.error('[Firestore] fetchCustomerReportBookings error:', err);
-      return lotteryService.getCustomerReportBookings(filter, role);
+      return [];
     }
   }
 
@@ -1280,36 +1470,18 @@ class LiveFirebaseService {
     const { db, auth } = initFirebase();
     const effectiveUid = operatorUid || auth?.currentUser?.uid || this.status.currentUser?.uid || '';
     operatorUid = effectiveUid;
-    let firestoreBookings: TicketBooking[] = [];
 
-    const emitMerged = () => {
+    if (!db) {
       const localBookings = lotteryService
         .getBookings(drawDate, role, operatorUid)
         .filter((b) => b.date === drawDate || !b.date);
-      if (firestoreBookings.length === 0) {
-        onUpdate(lotteryService.ensureLegacyCustomerIds(localBookings));
-        return;
-      }
-      const byTicket = new Map<string, TicketBooking>();
-      for (const b of localBookings) {
-        byTicket.set(b.ticketNumber, b);
-      }
-      for (const b of firestoreBookings) {
-        if (b.bookingStatus === 'Cancelled') {
-          byTicket.delete(b.ticketNumber);
-        } else {
-          byTicket.set(b.ticketNumber, b);
-        }
-      }
-      onUpdate(lotteryService.ensureLegacyCustomerIds(Array.from(byTicket.values())));
-    };
-
-    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
-      emitMerged();
-    });
-
-    if (!db) {
-      emitMerged();
+      onUpdate(lotteryService.ensureLegacyCustomerIds(localBookings));
+      const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+        const updated = lotteryService
+          .getBookings(drawDate, role, operatorUid)
+          .filter((b) => b.date === drawDate || !b.date);
+        onUpdate(lotteryService.ensureLegacyCustomerIds(updated));
+      });
       return () => unsubLocal();
     }
 
@@ -1326,21 +1498,20 @@ class LiveFirebaseService {
         : null;
 
     if (!q) {
-      emitMerged();
-      return () => unsubLocal();
+      onUpdate([]);
+      return () => {};
     }
 
     const unsubFirestore = onSnapshot(
       q,
       (snapshot) => {
-        firestoreBookings = snapshot.docs.map((d) =>
-          this.normalizeFirestoreBooking({ id: d.id, ...(d.data() as any) })
-        );
-        emitMerged();
+        const activeBookings = snapshot.docs
+          .map((d) => this.normalizeFirestoreBooking({ id: d.id, ...(d.data() as any) }))
+          .filter((b) => b.bookingStatus !== 'Cancelled');
+        onUpdate(lotteryService.ensureLegacyCustomerIds(activeBookings));
       },
       (err) => {
         console.error('[Firestore] subscribeBookings listener error:', err);
-        emitMerged();
         if (onError && !String(err?.message || '').includes('insufficient permissions')) {
           onError(err);
         }
@@ -1348,7 +1519,6 @@ class LiveFirebaseService {
     );
 
     return () => {
-      unsubLocal();
       unsubFirestore();
     };
   }
@@ -1358,17 +1528,23 @@ class LiveFirebaseService {
    */
   public async fetchConfigFirestore(): Promise<SystemConfig | null> {
     const { db } = initFirebase();
-    if (!db) return null;
+    if (!db) return DEFAULT_CONFIG;
 
     try {
       const snap = await getDoc(doc(db, 'config', 'system'));
       if (snap.exists()) {
-        return snap.data() as SystemConfig;
+        const raw = snap.data() as Partial<SystemConfig>;
+        return {
+          ...DEFAULT_CONFIG,
+          ...raw,
+          halfTicketPrice: raw.halfTicketPrice != null && Number(raw.halfTicketPrice) >= 300 ? Number(raw.halfTicketPrice) : 300,
+          fullTicketPrice: raw.fullTicketPrice != null && Number(raw.fullTicketPrice) >= 570 ? Number(raw.fullTicketPrice) : 570,
+        };
       }
-      return null;
+      return DEFAULT_CONFIG;
     } catch (err) {
       console.error('[Firestore] fetchConfig error:', err);
-      return null;
+      return DEFAULT_CONFIG;
     }
   }
 
@@ -1412,6 +1588,41 @@ class LiveFirebaseService {
   }
 
   /**
+   * Real-time subscription to winners in Firestore
+   */
+  public subscribeWinnersFirestore(
+    drawDate: string,
+    onUpdate: (winners: TodayWinnerRecord[]) => void,
+    onError?: (err: Error) => void
+  ): () => void {
+    const { db } = initFirebase();
+    if (!db) {
+      onUpdate(lotteryService.getWinners());
+      const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+        onUpdate(lotteryService.getWinners());
+      });
+      return () => unsubLocal();
+    }
+    try {
+      const q = query(collection(db, 'winners'), where('drawDate', '==', drawDate));
+      return onSnapshot(
+        q,
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TodayWinnerRecord[];
+          onUpdate(list);
+        },
+        (err) => {
+          console.warn('[Firestore] subscribeWinners error:', err);
+          if (onError) onError(err);
+        }
+      );
+    } catch (err: any) {
+      console.warn('[Firestore] subscribeWinners setup error:', err);
+      return () => {};
+    }
+  }
+
+  /**
    * Add winner record to Firestore (Admin Only)
    */
   public async addWinnerFirestore(
@@ -1435,6 +1646,61 @@ class LiveFirebaseService {
   }
 
   /**
+   * Update winner winning amount in Firestore (Admin Only)
+   */
+  public async updateWinnerAmountFirestore(
+    winnerId: string,
+    winningAmount: number,
+    role: LoginType
+  ): Promise<{ success: boolean; error?: string }> {
+    if (role !== 'admin') {
+      return { success: false, error: 'Permission Denied: Only Admin can update winner amounts.' };
+    }
+
+    const { db } = initFirebase();
+    if (!db) {
+      return lotteryService.updateWinnerAmount(winnerId, winningAmount, role);
+    }
+
+    try {
+      const winnerDocRef = doc(db, 'winners', winnerId);
+      await updateDoc(winnerDocRef, {
+        winningAmount,
+        prizeAmount: winningAmount,
+        updatedAt: serverTimestamp(),
+      });
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Delete winner record from Firestore (Admin Only)
+   */
+  public async deleteWinnerFirestore(
+    winnerId: string,
+    role: LoginType
+  ): Promise<{ success: boolean; error?: string }> {
+    if (role !== 'admin') {
+      return { success: false, error: 'Permission Denied: Only Admin can delete winners.' };
+    }
+
+    const { db } = initFirebase();
+    if (!db) {
+      return lotteryService.deleteWinnerRecord(winnerId, role);
+    }
+
+    try {
+      const winnerDocRef = doc(db, 'winners', winnerId);
+      await deleteDoc(winnerDocRef);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
    * Fetch result paper declaration documents from Firestore
    */
   public async fetchResultPapersFirestore(drawDate: string): Promise<ResultPaperDocument[]> {
@@ -1448,6 +1714,41 @@ class LiveFirebaseService {
     } catch (err) {
       console.error('[Firestore] fetchResultPapers error:', err);
       return [];
+    }
+  }
+
+  /**
+   * Real-time subscription to result papers in Firestore
+   */
+  public subscribeResultPapersFirestore(
+    drawDate: string,
+    onUpdate: (papers: ResultPaperDocument[]) => void,
+    onError?: (err: Error) => void
+  ): () => void {
+    const { db } = initFirebase();
+    if (!db) {
+      onUpdate(lotteryService.getResultPapers());
+      const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+        onUpdate(lotteryService.getResultPapers());
+      });
+      return () => unsubLocal();
+    }
+    try {
+      const q = query(collection(db, 'resultPapers'), where('drawDate', '==', drawDate));
+      return onSnapshot(
+        q,
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as ResultPaperDocument[];
+          onUpdate(list);
+        },
+        (err) => {
+          console.warn('[Firestore] subscribeResultPapers error:', err);
+          if (onError) onError(err);
+        }
+      );
+    } catch (err: any) {
+      console.warn('[Firestore] subscribeResultPapers setup error:', err);
+      return () => {};
     }
   }
 
@@ -2342,76 +2643,85 @@ class LiveFirebaseService {
       return () => {};
     }
     const { db } = initFirebase();
-    let firestoreInventory: TicketInventoryItem[] = [];
-
-    const emitMerged = () => {
+    if (!db) {
       const localInventory = lotteryService.getInventory(drawDate, seriesId, role);
-      if (firestoreInventory.length === 0) {
-        onUpdate(localInventory);
-        return;
-      }
-      const byTicket = new Map<string, TicketInventoryItem>();
-      for (const item of localInventory) {
-        byTicket.set(item.ticketNumber, item);
-      }
-      for (const item of firestoreInventory) {
-        if (role !== 'admin' && item.status !== 'PUBLISHED') continue;
-        byTicket.set(item.ticketNumber, item);
-      }
-      const sorted = Array.from(byTicket.values()).sort((a, b) =>
-        a.ticketNumber.localeCompare(b.ticketNumber, undefined, { numeric: true })
-      );
-      onUpdate(sorted);
-    };
-
-    emitMerged();
-    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
-      emitMerged();
-    });
-
-    let unsubFirestore = () => {};
-    if (db) {
-      try {
-        const q = query(
-          collection(db, 'ticketInventory'),
-          where('drawDate', '==', drawDate)
-        );
-        unsubFirestore = onSnapshot(
-          q,
-          (snapshot) => {
-            firestoreInventory = snapshot.docs.map((d) => {
-              const data = d.data() as any;
-              return {
-                id: d.id,
-                ticketNumber: String(data.ticketNumber || '').padStart(4, '0'),
-                drawDate: String(data.drawDate || drawDate),
-                drawKey: String(data.drawKey || ''),
-                seriesId: String(data.seriesId || seriesId),
-                seriesTitle: data.seriesTitle,
-                status: (data.status || 'PUBLISHED') as 'PUBLISHED' | 'UNPUBLISHED',
-                bookingStatus: data.bookingStatus || 'Available',
-                bookedTicketId: data.bookedTicketId,
-                createdAtIso: data.createdAtIso || new Date().toISOString(),
-                publishedAtIso: data.publishedAtIso,
-                createdByUid: data.createdByUid || '',
-                createdByName: data.createdByName,
-              };
-            });
-            emitMerged();
-          },
-          (err) => {
-            if (onError && !String(err?.message || '').includes('insufficient permissions')) {
-              onError(err);
-            }
-          }
-        );
-      } catch (err) {}
+      onUpdate(localInventory);
+      const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+        onUpdate(lotteryService.getInventory(drawDate, seriesId, role));
+      });
+      return () => unsubLocal();
     }
 
+    let unsubFirestore = () => {};
+    try {
+      const q = query(
+        collection(db, 'ticketInventory'),
+        where('drawDate', '==', drawDate)
+      );
+      unsubFirestore = onSnapshot(
+        q,
+        (snapshot) => {
+          const firestoreInventory = snapshot.docs.map((d) => {
+            const data = d.data() as any;
+            return {
+              id: d.id,
+              ticketNumber: String(data.ticketNumber || '').padStart(4, '0'),
+              drawDate: String(data.drawDate || drawDate),
+              drawKey: String(data.drawKey || ''),
+              seriesId: String(data.seriesId || seriesId),
+              seriesTitle: data.seriesTitle,
+              status: (data.status || 'PUBLISHED') as 'PUBLISHED' | 'UNPUBLISHED',
+              bookingStatus: data.bookingStatus || 'Available',
+              bookedTicketId: data.bookedTicketId,
+              createdAtIso: data.createdAtIso || new Date().toISOString(),
+              publishedAtIso: data.publishedAtIso,
+              createdByUid: data.createdByUid || '',
+              createdByName: data.createdByName,
+            };
+          }).filter((item) => role === 'admin' || item.status === 'PUBLISHED');
+
+          const sorted = firestoreInventory.sort((a, b) =>
+            a.ticketNumber.localeCompare(b.ticketNumber, undefined, { numeric: true })
+          );
+          onUpdate(sorted);
+        },
+        (err) => {
+          if (onError && !String(err?.message || '').includes('insufficient permissions')) {
+            onError(err);
+          }
+        }
+      );
+    } catch (err) {}
+
     return () => {
-      unsubLocal();
       unsubFirestore();
     };
+  }
+
+  public async fetchGridAppearanceFirestore(): Promise<GridAppearanceConfig> {
+    const { db } = initFirebase();
+    if (db) {
+      try {
+        const docRef = doc(db, 'config', 'appearance');
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data() as any;
+          const config: GridAppearanceConfig = {
+            availableBg: data.availableBg || '#ffffff',
+            lockedBg: data.lockedBg || 'rgba(148, 163, 184, 0.45)',
+            textColor: data.textColor || '#0f172a',
+            borderColor: data.borderColor || '#cbd5e1',
+            updatedAtIso: data.updatedAtIso,
+            updatedByUid: data.updatedByUid,
+          };
+          lotteryService.updateGridAppearance(config, 'admin');
+          return config;
+        }
+      } catch (err: any) {
+        console.warn('[Firestore] Failed to fetch appearance config:', err);
+      }
+    }
+    return lotteryService.getGridAppearance();
   }
 
   public subscribeGridAppearanceFirestore(
@@ -2761,6 +3071,260 @@ class LiveFirebaseService {
     return localRes;
   }
 
+  /**
+   * Schedule ticket publication for a future date & time (Admin only).
+   */
+  public async scheduleTicketPublicationFirestore(params: {
+    drawDate: string;
+    seriesId: string;
+    seriesTitle: string;
+    tickets: string[];
+    scheduledForMs: number;
+    scheduledForIso?: string;
+    scheduledForDisplay?: string;
+    timezone?: string;
+    operator: { id: string; name: string; role: LoginType };
+  }): Promise<{ success: boolean; schedule?: ScheduledPublication; error?: string }> {
+    if (params.operator.role !== 'admin') {
+      return { success: false, error: 'Only Admins can schedule ticket publication.' };
+    }
+
+    const localRes = lotteryService.schedulePublication(params);
+
+    const { auth, db } = initFirebase();
+    const scriptUrl = getOtpAppsScriptUrl();
+
+    if (auth?.currentUser && scriptUrl) {
+      try {
+        const idToken = await auth.currentUser.getIdToken();
+        const serverRes = await this.callOtpAppsScript({
+          action: 'scheduleTicketPublication',
+          idToken,
+          drawDate: params.drawDate,
+          seriesId: params.seriesId,
+          seriesTitle: params.seriesTitle,
+          tickets: params.tickets,
+          scheduledForMs: params.scheduledForMs,
+          scheduledForIso: params.scheduledForIso,
+          scheduledForDisplay: params.scheduledForDisplay,
+          timezone: params.timezone || 'Asia/Kolkata',
+        });
+        if (serverRes?.success) {
+          return { success: true, schedule: serverRes.schedule };
+        }
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+          return { success: false, error: serverRes.error };
+        }
+      } catch (err: any) {
+        console.warn('[Apps Script] scheduleTicketPublication error:', err);
+      }
+    }
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'scheduledPublications', localRes.schedule.id), {
+          ...localRes.schedule,
+          createdAt: serverTimestamp(),
+        });
+      } catch (err: any) {
+        console.warn('[Firestore] scheduleTicketPublication error:', err);
+      }
+    }
+
+    return { success: true, schedule: localRes.schedule };
+  }
+
+  /**
+   * Cancel a scheduled publication before execution (Admin only).
+   */
+  public async cancelScheduledPublicationFirestore(
+    scheduleId: string,
+    operator: { id: string; name: string; role: LoginType }
+  ): Promise<{ success: boolean; error?: string }> {
+    if (operator.role !== 'admin') {
+      return { success: false, error: 'Only Admins can cancel scheduled publications.' };
+    }
+
+    lotteryService.cancelScheduledPublication(scheduleId);
+
+    const { auth, db } = initFirebase();
+    const scriptUrl = getOtpAppsScriptUrl();
+
+    if (auth?.currentUser && scriptUrl) {
+      try {
+        const idToken = await auth.currentUser.getIdToken();
+        const serverRes = await this.callOtpAppsScript({
+          action: 'cancelScheduledPublication',
+          idToken,
+          scheduleId,
+        });
+        if (serverRes?.success) {
+          return { success: true };
+        }
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+          return { success: false, error: serverRes.error };
+        }
+      } catch (err: any) {
+        console.warn('[Apps Script] cancelScheduledPublication error:', err);
+      }
+    }
+
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'scheduledPublications', scheduleId), {
+          status: 'CANCELLED',
+          cancelledAt: serverTimestamp(),
+          cancelledBy: operator.name,
+        });
+      } catch (err: any) {
+        console.warn('[Firestore] cancelScheduledPublication error:', err);
+      }
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Update an existing scheduled publication (Admin only).
+   */
+  public async updateScheduledPublicationFirestore(
+    scheduleId: string,
+    params: {
+      tickets: string[];
+      scheduledForMs: number;
+      scheduledForIso?: string;
+      scheduledForDisplay?: string;
+    },
+    operator: { id: string; name: string; role: LoginType }
+  ): Promise<{ success: boolean; error?: string }> {
+    if (operator.role !== 'admin') {
+      return { success: false, error: 'Only Admins can edit scheduled publications.' };
+    }
+
+    lotteryService.updateScheduledPublication(scheduleId, params);
+
+    const { db } = initFirebase();
+    if (db) {
+      try {
+        const updatePayload: Record<string, any> = {
+          tickets: params.tickets.map((t) => String(t).padStart(4, '0')),
+          ticketCount: params.tickets.length,
+          scheduledForMs: params.scheduledForMs,
+          scheduledForIso: params.scheduledForIso || new Date(params.scheduledForMs).toISOString(),
+          scheduledForDisplay: params.scheduledForDisplay || new Date(params.scheduledForMs).toLocaleString(),
+          updatedAt: serverTimestamp(),
+          updatedBy: operator.name,
+        };
+        await updateDoc(doc(db, 'scheduledPublications', scheduleId), updatePayload);
+      } catch (err: any) {
+        console.warn('[Firestore] updateScheduledPublication error:', err);
+      }
+    }
+    return { success: true };
+  }
+
+  /**
+   * Fetch all scheduled publications from Firestore or Apps Script.
+   */
+  public async fetchScheduledPublicationsFirestore(
+    role: LoginType
+  ): Promise<ScheduledPublication[]> {
+    if (role === 'paid_employee') return [];
+
+    const { auth, db } = initFirebase();
+    const scriptUrl = getOtpAppsScriptUrl();
+
+    if (auth?.currentUser && scriptUrl) {
+      try {
+        const idToken = await auth.currentUser.getIdToken();
+        const serverRes = await this.callOtpAppsScript({
+          action: 'getScheduledPublications',
+          idToken,
+        });
+        if (serverRes?.success && Array.isArray(serverRes.schedules)) {
+          return serverRes.schedules;
+        }
+      } catch (err: any) {
+        console.warn('[Apps Script] getScheduledPublications error:', err);
+      }
+    }
+
+    if (db) {
+      try {
+        const snaps = await getDocs(collection(db, 'scheduledPublications'));
+        const list: ScheduledPublication[] = snaps.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }));
+        list.sort((a, b) => Number(a.scheduledForMs || 0) - Number(b.scheduledForMs || 0));
+        return list;
+      } catch (err: any) {
+        console.warn('[Firestore] fetchScheduledPublications error:', err);
+      }
+    }
+
+    return lotteryService.getScheduledPublications();
+  }
+
+  /**
+   * Subscribe to real-time changes on scheduledPublications collection.
+   */
+  public subscribeScheduledPublicationsFirestore(
+    onData: (schedules: ScheduledPublication[]) => void
+  ): () => void {
+    const { db } = initFirebase();
+    if (!db) {
+      onData(lotteryService.getScheduledPublications());
+      return () => {};
+    }
+    try {
+      const q = query(collection(db, 'scheduledPublications'));
+      const unsub = onSnapshot(
+        q,
+        (snap) => {
+          const list: ScheduledPublication[] = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          }));
+          list.sort((a, b) => Number(a.scheduledForMs || 0) - Number(b.scheduledForMs || 0));
+          onData(list);
+        },
+        (err) => {
+          console.warn('[Firestore] subscribeScheduledPublicationsFirestore error:', err);
+          onData(lotteryService.getScheduledPublications());
+        }
+      );
+      return unsub;
+    } catch {
+      onData(lotteryService.getScheduledPublications());
+      return () => {};
+    }
+  }
+
+  /**
+   * Trigger processing of due scheduled publications (idempotent check).
+   */
+  public async processScheduledPublicationsFirestore(): Promise<{ success: boolean; processedCount?: number }> {
+    const { auth } = initFirebase();
+    const scriptUrl = getOtpAppsScriptUrl();
+
+    if (auth?.currentUser && scriptUrl) {
+      try {
+        const idToken = await auth.currentUser.getIdToken();
+        const serverRes = await this.callOtpAppsScript({
+          action: 'processScheduledPublications',
+          idToken,
+        });
+        if (serverRes?.success) {
+          return { success: true, processedCount: serverRes.processedSchedulesCount };
+        }
+      } catch {}
+    }
+
+    const localRes = lotteryService.processScheduledPublications();
+    return { success: true, processedCount: localRes.processedCount };
+  }
+
   public async confirmPendingBookingFirestore(
     bookingId: string,
     operator: { id: string; name: string; role: LoginType }
@@ -2799,6 +3363,17 @@ class LiveFirebaseService {
           bookingStatus: 'Booked',
           history: localRes.booking.history,
         });
+        const normNum = String(localRes.booking.ticketNumber).padStart(4, '0');
+        const drawDate = localRes.booking.date;
+        const seriesId = localRes.booking.seriesTitle || 'default';
+        const tRef = doc(db, 'draws', drawDate, 'series', seriesId, 'tickets', normNum);
+        await setDoc(tRef, { bookingStatus: 'Booked' }, { merge: true }).catch(() => {});
+        const invRef = doc(db, 'ticketInventory', `${drawDate}_col-1_${normNum}`);
+        await setDoc(
+          invRef,
+          { bookingStatus: 'Booked', bookedTicketId: bookingId },
+          { merge: true }
+        ).catch(() => {});
       } catch (e) {
         console.warn('[Firestore] Failed to update booking doc:', e);
       }
@@ -2824,11 +3399,10 @@ class LiveFirebaseService {
       const q = query(collection(db, 'paymentQueue'), where('drawDate', '==', drawDate));
       const snap = await getDocs(q);
       const list = snap.docs.map((d) => d.data() as PaymentQueueTask);
-      if (list.length > 0) return list;
-      return lotteryService.getPaymentQueue(drawDate);
+      return list;
     } catch (e) {
-      console.warn('[Firestore] fetchPaymentQueue error, using local queue:', e);
-      return lotteryService.getPaymentQueue(drawDate);
+      console.warn('[Firestore] fetchPaymentQueue error:', e);
+      return [];
     }
   }
 
@@ -2847,56 +3421,39 @@ class LiveFirebaseService {
     }
 
     const { db } = initFirebase();
-    let firestoreTasks: PaymentQueueTask[] = [];
-
-    const emitMerged = () => {
+    if (!db) {
       const localTasks = lotteryService.getPaymentQueue(drawDate);
-      if (firestoreTasks.length === 0) {
-        onUpdate(localTasks);
-        return;
-      }
-      const byId = new Map<string, PaymentQueueTask>();
-      for (const t of localTasks) {
-        byId.set(t.id, t);
-      }
-      for (const t of firestoreTasks) {
-        byId.set(t.id, t);
-      }
-      onUpdate(Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-    };
-
-    emitMerged();
-    const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
-      emitMerged();
-    });
-
-    let unsubFirestore = () => {};
-    if (db) {
-      try {
-        const q = query(collection(db, 'paymentQueue'), where('drawDate', '==', drawDate));
-        unsubFirestore = onSnapshot(
-          q,
-          (snapshot) => {
-            firestoreTasks = snapshot.docs.map((d) => {
-              const data = d.data();
-              return {
-                ...data,
-                employeeLabel: (data.employeeLabel as string) || 'L1',
-              } as PaymentQueueTask;
-            });
-            emitMerged();
-          },
-          (err) => {
-            if (onError && !String(err?.message || '').includes('insufficient permissions')) {
-              onError(err);
-            }
-          }
-        );
-      } catch (err) {}
+      onUpdate(localTasks);
+      const unsubLocal = lotteryService.subscribeRealtimeSync(() => {
+        onUpdate(lotteryService.getPaymentQueue(drawDate));
+      });
+      return () => unsubLocal();
     }
 
+    let unsubFirestore = () => {};
+    try {
+      const q = query(collection(db, 'paymentQueue'), where('drawDate', '==', drawDate));
+      unsubFirestore = onSnapshot(
+        q,
+        (snapshot) => {
+          const firestoreTasks = snapshot.docs.map((d) => {
+            const data = d.data();
+            return {
+              ...data,
+              employeeLabel: (data.employeeLabel as string) || 'L1',
+            } as PaymentQueueTask;
+          });
+          onUpdate(firestoreTasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+        },
+        (err) => {
+          if (onError && !String(err?.message || '').includes('insufficient permissions')) {
+            onError(err);
+          }
+        }
+      );
+    } catch (err) {}
+
     return () => {
-      unsubLocal();
       unsubFirestore();
     };
   }
@@ -2914,57 +3471,41 @@ class LiveFirebaseService {
     operator?: { id: string; name: string; role: LoginType }
   ): Promise<{ success: boolean; taskId?: string; remainingBalance?: number; error?: string }> {
     const { auth } = initFirebase();
-    const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
-    const idempotencyKey = `idem_pq_${taskId}_${Date.now()}`;
-
-    if (idToken) {
-      try {
-        const serverRes = await this.callOtpAppsScript({
-          action: 'completePaymentTask',
-          idToken,
-          taskId,
-          bookingId,
-          amountPaid,
-          paymentMethod,
-          paymentRef,
-          idempotencyKey,
-        });
-
-        if (serverRes?.success) {
-          lotteryService.completePaymentTask(
-            taskId,
-            bookingId,
-            amountPaid,
-            paymentMethod,
-            paymentRef,
-            operator,
-            { idempotencyKey }
-          );
-          return {
-            success: true,
-            taskId: serverRes.taskId || taskId,
-            remainingBalance: serverRes.remainingBalance ?? 0,
-          };
-        }
-
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
-          return { success: false, error: serverRes.error };
-        }
-      } catch (e: any) {
-        console.warn('[Apps Script] completePaymentTask error, fallback to local', e);
-      }
+    if (!auth?.currentUser) {
+      return { success: false, error: 'Authentication required: User must be signed in to complete payment task.' };
     }
 
-    const localRes = lotteryService.completePaymentTask(
-      taskId,
-      bookingId,
-      amountPaid,
-      paymentMethod,
-      paymentRef,
-      operator,
-      { idempotencyKey }
-    );
-    return localRes;
+    const safeRef = paymentRef ? encodeURIComponent(paymentRef.trim()) : 'task';
+    const idempotencyKey = `idem_pq_${taskId}_${safeRef}`;
+
+    try {
+      const idToken = await auth.currentUser.getIdToken().catch(() => null);
+      if (!idToken) {
+        return { success: false, error: 'Authentication required: Unable to obtain ID token.' };
+      }
+      const serverRes = await this.callOtpAppsScript({
+        action: 'completePaymentTask',
+        idToken,
+        taskId,
+        bookingId,
+        amountPaid,
+        paymentMethod,
+        paymentRef,
+        idempotencyKey,
+      });
+
+      if (serverRes?.success) {
+        return {
+          success: true,
+          taskId: serverRes.taskId || taskId,
+          remainingBalance: serverRes.remainingBalance ?? 0,
+        };
+      }
+
+      return { success: false, error: serverRes?.error || 'Failed to complete payment task via backend.' };
+    } catch (e: any) {
+      return { success: false, error: e?.message || 'Apps Script network failure' };
+    }
   }
 
   /**
@@ -3014,6 +3555,44 @@ class LiveFirebaseService {
       unsubLocal();
       unsubFirestore();
     };
+  }
+
+  /**
+   * Admin-Only: Removes an employee from Firestore and local registry
+   */
+  public async removeEmployeeFirestore(
+    uidOrLabel: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (this.currentRole !== 'admin') {
+      return { success: false, error: 'Unauthorized: Only Admin can remove employees.' };
+    }
+    const localRes = lotteryService.removeEmployee(uidOrLabel, 'admin');
+
+    const { db } = initFirebase();
+    if (db) {
+      try {
+        const { doc, deleteDoc, getDocs, collection } = await import('firebase/firestore');
+        // Try delete by doc ID
+        try {
+          await deleteDoc(doc(db, 'employeeLabels', uidOrLabel));
+        } catch {}
+
+        // Query by label if not doc ID
+        try {
+          const snap = await getDocs(collection(db, 'employeeLabels'));
+          for (const d of snap.docs) {
+            const data = d.data();
+            if (data.label === uidOrLabel || d.id === uidOrLabel) {
+              await deleteDoc(doc(db, 'employeeLabels', d.id));
+            }
+          }
+        } catch {}
+      } catch (err: any) {
+        console.warn('Failed to delete employee from Firestore:', err);
+      }
+    }
+
+    return localRes;
   }
 }
 

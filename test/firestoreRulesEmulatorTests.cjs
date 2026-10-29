@@ -160,7 +160,8 @@ async function run() {
   const hasPaidEmployeeBlockedFromBookings =
     rawRules.includes('isRegularEmployeeRole() && resource.data.bookedByUid == request.auth.uid');
   const hasPaidEmployeeBlockedFromInventory =
-    rawRules.includes('!isPaidEmployeeRole() && (isAdmin() || resource.data.status == \'PUBLISHED\')');
+    rawRules.includes('match /ticketInventory/{inventoryId}') &&
+    rawRules.includes('!isPaidEmployeeRole()');
   const hasPaidEmployeeBlockedFromTickets =
     rawRules.includes('!isPaidEmployeeRole()');
   const hasPaymentQueueRule =

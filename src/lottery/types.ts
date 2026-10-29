@@ -53,9 +53,9 @@ export interface TicketBooking {
   customerPhone: string;
   ticketType: TicketType;      // 'half' | 'full' | 'both'
   halfSelected: boolean;
-  halfAmount: number;          // Default ₹25
+  halfAmount: number;          // Default ₹300
   fullSelected: boolean;
-  fullAmount: number;          // Default ₹50
+  fullAmount: number;          // Default ₹570
   totalAmount: number;         // Calculated based on half/full
   amountPaid: number;          // Sum of verified payments
   remainingBalance: number;    // totalAmount - amountPaid
@@ -180,6 +180,35 @@ export interface WeeklyTicketPresetsConfig {
   updatedByUid?: string;
 }
 
+export type ScheduledPublicationStatus = 'DRAFT' | 'SCHEDULED' | 'PUBLISHED' | 'FAILED' | 'CANCELLED';
+
+export interface ScheduledPublication {
+  id: string;
+  drawDate: string;
+  seriesId: string;
+  seriesTitle: string;
+  label?: string;
+  tickets: string[];
+  ticketCount: number;
+  scheduledForMs: number;
+  scheduledForIso: string;
+  scheduledForDisplay: string;
+  timezone: string;
+  status: ScheduledPublicationStatus;
+  createdAt: string;
+  createdBy: string;
+  createdByUid?: string;
+  publishedAtIso?: string;
+  publishedCount?: number;
+  skippedCount?: number;
+  cancelledAt?: string;
+  cancelledBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  failedAtIso?: string;
+  error?: string;
+}
+
 export const DAYS_OF_WEEK: DayOfWeek[] = [
   'Monday',
   'Tuesday',
@@ -268,14 +297,24 @@ export const DEFAULT_WEEKLY_PRESETS: WeeklyTicketPresetsConfig = {
 export interface TodayWinnerRecord {
   id: string;
   drawDate: string;
-  seriesTitle: string;
+  seriesTitle?: string;
   winningNumber: string;
-  prizeCategory: string;
-  prizeAmount: number;
-  verifiedBy: string;
-  enteredAt: string;
-  status: 'Official' | 'Draft';
+  prizeCategory?: string;
+  prizeAmount?: number;
+  verifiedBy?: string;
+  enteredAt?: string;
+  status?: 'Official' | 'Draft';
   notes?: string;
+  // Enhanced fields for Winners Table view:
+  employeeLabel?: string; // L1, L2, ...
+  employeeId?: string; // e.g. EMP001 or staff name
+  customerCode?: string; // permanent customer code e.g. #0000, #5316
+  customerName?: string; // name of winner
+  customerPhone?: string;
+  ticketCount?: number; // no of tickets
+  ticketDetails?: string; // winned ticket numbers along halfset and fullset numbers
+  ticketAmount?: number; // winned ticket amount (amount received)
+  winningAmount?: number; // total winning amount entered by admin (editable)
 }
 
 export interface ResultPaperDocument {

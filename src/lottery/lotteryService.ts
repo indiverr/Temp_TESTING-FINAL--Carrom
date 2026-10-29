@@ -18,6 +18,7 @@ import {
   DAYS_OF_WEEK,
   DayOfWeek,
   PaymentQueueTask,
+  ScheduledPublication,
 } from './types';
 import { LOTTERY_COLUMNS_SPEC } from './mockData';
 
@@ -36,6 +37,7 @@ const STORAGE_KEYS = {
   WEEKLY_PRESETS: 'carrom_lottery_weekly_presets_v1',
   PAYMENT_QUEUE: 'carrom_lottery_payment_queue_v1',
   EMPLOYEE_LABELS: 'carrom_lottery_employee_labels_v1',
+  SCHEDULES: 'carrom_lottery_scheduled_publications_v1',
 };
 
 export const DEFAULT_EMPLOYEE_LABELS: Record<string, { uid: string; label: string; name: string; role: LoginType }> = {
@@ -45,15 +47,32 @@ export const DEFAULT_EMPLOYEE_LABELS: Record<string, { uid: string; label: strin
   PEM001: { uid: 'PEM001', label: 'L4', name: 'Gogul', role: 'paid_employee' },
 };
 
-export const TICKET_LOCK_DURATION_MS = 2 * 60 * 1000; // 2 minutes (120 seconds)
+export const TICKET_LOCK_DURATION_MS = 2 * 60 * 60 * 1000; // 2-hour fallback TTL (persists until confirmed or cancelled)
 export const CUSTOMER_CODE_BASE = 5315;               // First new customer serial code starts at #5316
+
+export function getTodayDateIST(): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+    return formatter.format(new Date());
+  } catch {
+    const d = new Date();
+    const day = String(d.getDate()).padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  }
+}
 
 // Initial default configuration
 export const DEFAULT_CONFIG: SystemConfig = {
   seriesTitle: 'CUSTOM NAME',
-  businessDate: '02 Oct 2026',
-  halfTicketPrice: 25,
-  fullTicketPrice: 50,
+  businessDate: (typeof window !== 'undefined' && localStorage.getItem('carrom_active_draw_date')) || '29 Oct 2026',
+  halfTicketPrice: 300,
+  fullTicketPrice: 570,
   gpayNumber: '9949311900',
   gpayName: 'Sasikaran (Carrom Draws)',
   upiId: 'sasikaran9949@oksbi',
@@ -67,113 +86,12 @@ export const INITIAL_STAFF_ACCOUNTS: EmployeeProfile[] = [
   { id: 'PEM001', name: 'Gogul', phone: '9765432109', role: 'paid_employee' },
 ];
 
-export const INITIAL_WINNERS: TodayWinnerRecord[] = [
-  {
-    id: 'win-1',
-    drawDate: '02 Oct 2026',
-    seriesTitle: 'CUSTOM NAME',
-    winningNumber: '0012',
-    prizeCategory: '1st Prize',
-    prizeAmount: 100000,
-    verifiedBy: 'Super Admin',
-    enteredAt: '02 Oct 2026 12:00 PM',
-    status: 'Official',
-    notes: 'Super bumper draw result verified with lottery board seal',
-  },
-  {
-    id: 'win-2',
-    drawDate: '02 Oct 2026',
-    seriesTitle: 'CUSTOM NAME',
-    winningNumber: '0076',
-    prizeCategory: '2nd Prize',
-    prizeAmount: 50000,
-    verifiedBy: 'Super Admin',
-    enteredAt: '02 Oct 2026 12:05 PM',
-    status: 'Official',
-    notes: 'Official 2nd prize draw',
-  },
-];
+export const INITIAL_WINNERS: TodayWinnerRecord[] = [];
 
-export const INITIAL_PAPERS: ResultPaperDocument[] = [
-  {
-    id: 'paper-1',
-    drawDate: '02 Oct 2026',
-    seriesTitle: 'CUSTOM NAME',
-    title: 'Official Evening Result Declaration Sheet #02-10-26',
-    fileUrl: '/assets/brand/anbu-aiot-logo.png',
-    uploadedBy: 'Super Admin',
-    uploadedAt: '02 Oct 2026 01:15 PM',
-    fileSizeKb: 342,
-    verifiedOfficial: true,
-  },
-];
+export const INITIAL_PAPERS: ResultPaperDocument[] = [];
 
-// Helper to seed realistic bookings with distinct customer serial codes (#5101 .. #5115)
-export const createInitialSeedBookings = (): TicketBooking[] => {
-  const seedItems = [
-    { num: '0003', name: 'Sasikaran', phone: '9949311900', customerId: '#5101', half: false, full: true, paid: false },
-    { num: '0007', name: 'Monoharan', phone: '9949311901', customerId: '#5102', half: false, full: true, paid: false },
-    { num: '0012', name: 'Hariharan', phone: '9845123456', customerId: '#5103', half: true, full: false, paid: false },
-    { num: '0015', name: 'Rajkumar', phone: '9845123401', customerId: '#5104', half: false, full: true, paid: false },
-    { num: '0021', name: 'Karthik', phone: '9845123402', customerId: '#5105', half: false, full: true, paid: false },
-    { num: '0024', name: 'Arun', phone: '9845123403', customerId: '#5106', half: true, full: false, paid: false },
-    { num: '0030', name: 'Praveen', phone: '9845123404', customerId: '#5107', half: false, full: true, paid: false },
-    { num: '0045', name: 'Senthil', phone: '9845123405', customerId: '#5108', half: false, full: true, paid: false },
-    { num: '0068', name: 'Dinesh', phone: '9845123406', customerId: '#5109', half: true, full: false, paid: false },
-    { num: '0076', name: 'Manikandan', phone: '9845123407', customerId: '#5110', half: false, full: true, paid: false },
-    { num: '0102', name: 'Gogul', phone: '9765432109', customerId: '#5111', half: false, full: true, paid: true },
-    { num: '0150', name: 'Vignesh', phone: '9845123408', customerId: '#5112', half: false, full: true, paid: false },
-    { num: '0188', name: 'Balaji', phone: '9845123409', customerId: '#5113', half: true, full: false, paid: false },
-    { num: '0203', name: 'Suresh', phone: '9845123410', customerId: '#5114', half: false, full: true, paid: false },
-    { num: '0224', name: 'Aravind', phone: '9845123411', customerId: '#5115', half: false, full: true, paid: false },
-  ];
-
-  return seedItems.map((item, index) => {
-    const halfAmt = item.half ? 25 : 0;
-    const fullAmt = item.full ? 50 : 0;
-    const total = halfAmt + fullAmt;
-    const isPaid = item.paid;
-    const amtPaid = isPaid ? total : 0;
-
-    return {
-      id: `booking-${item.num}`,
-      ticketNumber: item.num,
-      seriesTitle: 'CUSTOM NAME',
-      customerId: item.customerId,
-      customerName: item.name,
-      customerPhone: item.phone,
-      ticketType: item.half && item.full ? 'both' : item.half ? 'half' : 'full',
-      halfSelected: item.half,
-      halfAmount: halfAmt,
-      fullSelected: item.full,
-      fullAmount: fullAmt,
-      totalAmount: total,
-      amountPaid: amtPaid,
-      remainingBalance: total - amtPaid,
-      bookingStatus: 'Booked',
-      paymentStatus: isPaid ? 'Paid' : 'Unpaid',
-      paymentRef: isPaid ? `UPI-TXN-1029${index}` : undefined,
-      paidBy: isPaid ? item.name : undefined,
-      bookedBy: 'Sasikaran',
-      bookedByUsername: 'sasikaran',
-      bookedByRole: 'employee',
-      date: '02 Oct 2026',
-      bookedAt: '02 Oct 2026 09:30 AM',
-      paidAt: isPaid ? '02 Oct 2026 10:15 AM' : undefined,
-      history: [
-        {
-          id: `hist-${Date.now()}-${index}`,
-          timestamp: '02 Oct 2026 09:30 AM',
-          action: 'BOOKED',
-          amountChanged: total,
-          performedBy: 'Sasikaran',
-          performedByRole: 'employee',
-          notes: `Counter sales booking initiated (${item.customerId})`,
-        },
-      ],
-    };
-  });
-};
+// Legacy reference: Customer ID #5101 to #5115 backwards compatibility helper
+export const createInitialSeedBookings = (): TicketBooking[] => [];
 
 /**
  * Service class handling all transactional data operations,
@@ -192,6 +110,7 @@ class LotteryDatabaseService {
   private inMemoryWeeklyPresets: WeeklyTicketPresetsConfig = DEFAULT_WEEKLY_PRESETS;
   private inMemoryIdempotency: Map<string, any> = new Map();
   private inMemoryPaymentQueue: Map<string, PaymentQueueTask> = new Map();
+  private inMemorySchedules: Map<string, ScheduledPublication> = new Map();
   private inMemoryEmployeeLabels: Map<
     string,
     { uid: string; label: string; name: string; username?: string; role?: LoginType }
@@ -256,7 +175,11 @@ class LotteryDatabaseService {
       if (typeof window === 'undefined' || !window.localStorage) return;
       const storedBookings = localStorage.getItem(STORAGE_KEYS.BOOKINGS);
       if (storedBookings) {
-        this.inMemoryBookings = this.ensureLegacyCustomerIds(JSON.parse(storedBookings));
+        let parsed = JSON.parse(storedBookings);
+        if (Array.isArray(parsed) && parsed.some((b: any) => b.id?.startsWith('booking-0003') || b.customerId === '#5101')) {
+          parsed = [];
+        }
+        this.inMemoryBookings = this.ensureLegacyCustomerIds(parsed);
       }
       const storedLocks = localStorage.getItem(STORAGE_KEYS.LOCKS);
       if (storedLocks) {
@@ -423,33 +346,55 @@ class LotteryDatabaseService {
       }
       const storedConfig = localStorage.getItem(STORAGE_KEYS.CONFIG);
       if (storedConfig) {
-        this.inMemoryConfig = JSON.parse(storedConfig);
+        const parsed = JSON.parse(storedConfig);
+        this.inMemoryConfig = {
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          halfTicketPrice: parsed.halfTicketPrice != null && Number(parsed.halfTicketPrice) >= 300 ? Number(parsed.halfTicketPrice) : 300,
+          fullTicketPrice: parsed.fullTicketPrice != null && Number(parsed.fullTicketPrice) >= 570 ? Number(parsed.fullTicketPrice) : 570,
+        };
       } else {
         localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(DEFAULT_CONFIG));
       }
 
       const storedBookings = localStorage.getItem(STORAGE_KEYS.BOOKINGS);
       if (storedBookings) {
-        this.inMemoryBookings = this.ensureLegacyCustomerIds(JSON.parse(storedBookings));
+        let parsed = JSON.parse(storedBookings);
+        if (Array.isArray(parsed) && parsed.some((b: any) => b.id?.startsWith('booking-0003') || b.customerId === '#5101')) {
+          parsed = [];
+          localStorage.setItem(STORAGE_KEYS.BOOKINGS, JSON.stringify([]));
+        }
+        this.inMemoryBookings = this.ensureLegacyCustomerIds(parsed);
         this.saveBookings();
       } else {
-        const seed = this.ensureLegacyCustomerIds(createInitialSeedBookings());
-        this.inMemoryBookings = seed;
-        localStorage.setItem(STORAGE_KEYS.BOOKINGS, JSON.stringify(seed));
+        this.inMemoryBookings = [];
+        localStorage.setItem(STORAGE_KEYS.BOOKINGS, JSON.stringify([]));
       }
 
       const storedWinners = localStorage.getItem(STORAGE_KEYS.WINNERS);
       if (storedWinners) {
-        this.inMemoryWinners = JSON.parse(storedWinners);
+        let parsed = JSON.parse(storedWinners);
+        if (Array.isArray(parsed) && parsed.some((w: any) => w.id === 'win-1' || w.id === 'win-2')) {
+          parsed = [];
+          localStorage.setItem(STORAGE_KEYS.WINNERS, JSON.stringify([]));
+        }
+        this.inMemoryWinners = parsed;
       } else {
-        localStorage.setItem(STORAGE_KEYS.WINNERS, JSON.stringify(INITIAL_WINNERS));
+        this.inMemoryWinners = [];
+        localStorage.setItem(STORAGE_KEYS.WINNERS, JSON.stringify([]));
       }
 
       const storedPapers = localStorage.getItem(STORAGE_KEYS.PAPERS);
       if (storedPapers) {
-        this.inMemoryPapers = JSON.parse(storedPapers);
+        let parsed = JSON.parse(storedPapers);
+        if (Array.isArray(parsed) && parsed.some((p: any) => p.id === 'paper-1')) {
+          parsed = [];
+          localStorage.setItem(STORAGE_KEYS.PAPERS, JSON.stringify([]));
+        }
+        this.inMemoryPapers = parsed;
       } else {
-        localStorage.setItem(STORAGE_KEYS.PAPERS, JSON.stringify(INITIAL_PAPERS));
+        this.inMemoryPapers = [];
+        localStorage.setItem(STORAGE_KEYS.PAPERS, JSON.stringify([]));
       }
 
       const storedLabels =
@@ -508,6 +453,17 @@ class LotteryDatabaseService {
           }
         }
         this.savePaymentQueue();
+      }
+
+      const storedSchedules = localStorage.getItem(STORAGE_KEYS.SCHEDULES);
+      if (storedSchedules) {
+        const parsed = JSON.parse(storedSchedules);
+        if (Array.isArray(parsed)) {
+          this.inMemorySchedules = new Map();
+          for (const s of parsed) {
+            this.inMemorySchedules.set(s.id, s);
+          }
+        }
       }
     } catch {
       this.inMemoryBookings = this.ensureLegacyCustomerIds(createInitialSeedBookings());
@@ -637,6 +593,65 @@ class LotteryDatabaseService {
     return map;
   }
 
+  /**
+   * Admin-Only: Returns full employee list (L1, L2, L3...) with details.
+   */
+  public getAllEmployees(callerRole: LoginType): Array<{
+    uid: string;
+    label: string;
+    name: string;
+    username?: string;
+    role?: LoginType;
+  }> {
+    if (callerRole !== 'admin') {
+      return [];
+    }
+    const list: Array<{
+      uid: string;
+      label: string;
+      name: string;
+      username?: string;
+      role?: LoginType;
+    }> = [];
+    this.inMemoryEmployeeLabels.forEach((item) => {
+      list.push({ ...item });
+    });
+    // Sort by label index L1, L2, L3...
+    list.sort((a, b) => {
+      const numA = parseInt(a.label.replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt(b.label.replace(/\D/g, ''), 10) || 0;
+      return numA - numB;
+    });
+    return list;
+  }
+
+  /**
+   * Admin-Only: Removes an employee by UID or label.
+   */
+  public removeEmployee(
+    uidOrLabel: string,
+    callerRole: LoginType
+  ): { success: boolean; error?: string } {
+    if (callerRole !== 'admin') {
+      return { success: false, error: 'Unauthorized: Only Admin can remove employees.' };
+    }
+    let targetUid: string | null = null;
+    this.inMemoryEmployeeLabels.forEach((item, uid) => {
+      if (uid === uidOrLabel || item.label === uidOrLabel) {
+        targetUid = uid;
+      }
+    });
+
+    if (!targetUid) {
+      return { success: false, error: 'Employee not found.' };
+    }
+
+    this.inMemoryEmployeeLabels.delete(targetUid);
+    this.saveEmployeeLabels();
+    this.broadcastUpdate();
+    return { success: true };
+  }
+
   private normalizeTicketNum(num: string): string {
     return String(num || '').trim().padStart(4, '0');
   }
@@ -716,8 +731,37 @@ class LotteryDatabaseService {
   public isTicketBooked(ticketNumber: string, date: string): boolean {
     const norm = this.normalizeTicketNum(ticketNumber);
     return this.inMemoryBookings.some(
-      (b) => b.ticketNumber === norm && b.date === date && b.bookingStatus === 'Booked'
+      (b) =>
+        b.ticketNumber === norm &&
+        b.date === date &&
+        (b.bookingStatus === 'Booked' || b.bookingStatus === 'Pending Confirmation')
     );
+  }
+
+  public isTicketPending(ticketNumber: string, date: string): boolean {
+    const norm = this.normalizeTicketNum(ticketNumber);
+    return this.inMemoryBookings.some(
+      (b) => b.ticketNumber === norm && b.date === date && b.bookingStatus === 'Pending Confirmation'
+    );
+  }
+
+  public isTicketLocked(ticketNumber: string, date: string): boolean {
+    const norm = this.normalizeTicketNum(ticketNumber);
+    const lock = this.inMemoryLocks.get(`${date}_${norm}`);
+    return Boolean(lock && lock.status === 'LOCKED');
+  }
+
+  public setActiveDrawDate(date: string): void {
+    const clean = String(date || '').trim();
+    if (!clean) return;
+    this.inMemoryConfig.businessDate = clean;
+    this.saveConfig();
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('carrom_active_draw_date', clean);
+      }
+    } catch {}
+    this.broadcastUpdate();
   }
 
   /**
@@ -727,13 +771,21 @@ class LotteryDatabaseService {
     const active: TicketLock[] = [];
     let mutated = false;
     for (const [key, lock] of this.inMemoryLocks.entries()) {
-      if (lock.expiresAtMs <= nowMs || this.isTicketBooked(lock.ticketNumber, lock.drawDate)) {
+      if (this.isTicketBooked(lock.ticketNumber, lock.drawDate)) {
         this.inMemoryLocks.delete(key);
         mutated = true;
         continue;
       }
-      if (!date || lock.drawDate === date) {
-        active.push({ ...lock });
+      if (lock.status === 'LOCKED') {
+        const exp = Number(lock.expiresAtMs || 0);
+        if (exp > 0 && exp <= nowMs) {
+          this.inMemoryLocks.delete(key);
+          mutated = true;
+          continue;
+        }
+        if (!date || lock.drawDate === date) {
+          active.push({ ...lock });
+        }
       }
     }
     if (mutated) {
@@ -810,7 +862,7 @@ class LotteryDatabaseService {
 
       const lockKey = this.getLockKey(drawDate, num);
       const existing = this.inMemoryLocks.get(lockKey);
-      if (existing && existing.status === 'LOCKED' && existing.expiresAtMs > now) {
+      if (existing && existing.status === 'LOCKED') {
         if (existing.lockedByUid !== callerUid) {
           return {
             success: false,
@@ -1002,16 +1054,15 @@ class LotteryDatabaseService {
         released.push(num);
         continue;
       }
-      const isExpired = now > existing.expiresAtMs;
       const isOwner = existing.lockedByUid === callerUid;
-      if (!isOwner && !isExpired) {
+      if (!isOwner) {
         return {
           success: false,
           code: 'LOCK_OWNERSHIP_MISMATCH',
           error: 'Cannot release a ticket lock owned by another user.',
         };
       }
-      if (isOwner && params.lockId && existing.lockId !== params.lockId && !isExpired) {
+      if (isOwner && params.lockId && existing.lockId !== params.lockId) {
         return {
           success: false,
           code: 'LOCK_OWNERSHIP_MISMATCH',
@@ -1153,6 +1204,7 @@ class LotteryDatabaseService {
       requireLock?: boolean;
       nowMs?: number;
       bookedByUsername?: string;
+      bookingStatus?: 'Booked' | 'Pending Confirmation';
       customerId?: string;
       explicitCustomerId?: string;
     }
@@ -1182,49 +1234,13 @@ class LotteryDatabaseService {
     }));
     const ticketNumbers = normItems.map((i) => i.ticketNumber);
 
-    // 2. Verify lock ownership and expiry if requireLock is set or if any lock exists on these tickets
+    // 2. Verify lock ownership: prevent other users from booking if currently held by another user
     for (const item of normItems) {
       const lockKey = this.getLockKey(dateFormatted, item.ticketNumber);
       const lock = this.inMemoryLocks.get(lockKey);
 
-      if (options?.requireLock) {
-        if (!lock || lock.status !== 'LOCKED') {
-          return {
-            success: false,
-            bookedCount: 0,
-            code: 'LOCK_REQUIRED',
-            error: `Active ticket lock is required for ticket #${item.ticketNumber}. Please select the ticket again.`,
-          };
-        }
-        if (options.lockedByUid && lock.lockedByUid !== options.lockedByUid) {
-          return {
-            success: false,
-            bookedCount: 0,
-            code: 'LOCK_OWNERSHIP_MISMATCH',
-            error: 'This ticket is currently being booked by another user.',
-          };
-        }
-        if (options.lockId && lock.lockId !== options.lockId) {
-          return {
-            success: false,
-            bookedCount: 0,
-            code: 'LOCK_OWNERSHIP_MISMATCH',
-            error: 'This ticket is currently being booked by another user.',
-          };
-        }
-        if (now > lock.expiresAtMs) {
-          this.inMemoryLocks.delete(lockKey);
-          this.saveLocks();
-          this.broadcastUpdate();
-          return {
-            success: false,
-            bookedCount: 0,
-            code: 'LOCK_EXPIRED',
-            error: `Your 2-minute lock on ticket #${item.ticketNumber} has expired. Please acquire a new lock before confirming.`,
-          };
-        }
-      } else if (lock && lock.status === 'LOCKED' && lock.expiresAtMs > now) {
-        if (options?.lockedByUid && lock.lockedByUid !== options.lockedByUid) {
+      if (lock && lock.status === 'LOCKED') {
+        if (options?.lockedByUid && lock.lockedByUid && lock.lockedByUid !== options.lockedByUid) {
           return {
             success: false,
             bookedCount: 0,
@@ -1275,6 +1291,10 @@ class LotteryDatabaseService {
       minute: '2-digit',
     });
 
+    const effectiveBookingStatus =
+      options?.bookingStatus ||
+      (role === 'employee' ? 'Pending Confirmation' : 'Booked');
+
     const newBookings: TicketBooking[] = normItems.map((item, index) => {
       const halfPrice = item.half ? this.inMemoryConfig.halfTicketPrice : 0;
       const fullPrice = item.full ? this.inMemoryConfig.fullTicketPrice : 0;
@@ -1308,7 +1328,7 @@ class LotteryDatabaseService {
         totalAmount: total,
         amountPaid: 0,
         remainingBalance: total,
-        bookingStatus: 'Booked',
+        bookingStatus: effectiveBookingStatus,
         paymentStatus: 'Unpaid',
         bookedBy: performedBy,
         bookedByUsername: options?.bookedByUsername || performedBy.toLowerCase().replace(/\s+/g, '_'),
@@ -1326,6 +1346,16 @@ class LotteryDatabaseService {
     for (const num of ticketNumbers) {
       this.inMemoryLocks.delete(this.getLockKey(dateFormatted, num));
     }
+    // Update in-memory ticket inventory status so availableCount and grids reflect immediately
+    for (const item of normItems) {
+      for (const inv of this.inMemoryInventory.values()) {
+        if (inv.ticketNumber === item.ticketNumber && inv.drawDate === dateFormatted) {
+          inv.bookingStatus = effectiveBookingStatus;
+          inv.bookedTicketId = `b-${now}-${item.ticketNumber}`;
+        }
+      }
+    }
+    this.saveInventory();
     // Generate restricted payment queue task for pending/unpaid bookings (Requirement 4 & 5)
     for (const b of newBookings) {
       if (b.paymentStatus !== 'Paid') {
@@ -1456,6 +1486,7 @@ class LotteryDatabaseService {
     const newPaid = (booking.amountPaid || 0) + amt;
     const paymentStatus = newRemaining === 0 ? 'Paid' : 'Partial';
     const taskStatus = newRemaining === 0 ? 'COMPLETED' : 'PENDING';
+    const newBookingStatus = newRemaining === 0 ? 'Booked' : booking.bookingStatus;
     const nowIso = new Date().toISOString();
     const opName = operator?.name || 'Paid Employee';
     const opUid = operator?.id || 'PEM001';
@@ -1464,6 +1495,7 @@ class LotteryDatabaseService {
     booking.amountPaid = newPaid;
     booking.remainingBalance = newRemaining;
     booking.paymentStatus = paymentStatus;
+    booking.bookingStatus = newBookingStatus;
     booking.paidAt = nowIso;
     booking.paidBy = opName;
     if (!booking.history) booking.history = [];
@@ -1489,6 +1521,16 @@ class LotteryDatabaseService {
       task.completedAt = nowIso;
       task.completedBy = opName;
       task.completedByUid = opUid;
+    }
+
+    if (newBookingStatus === 'Booked') {
+      for (const inv of this.inMemoryInventory.values()) {
+        if (inv.ticketNumber === booking.ticketNumber && inv.drawDate === booking.date) {
+          inv.bookingStatus = 'Booked';
+          inv.bookedTicketId = booking.id;
+        }
+      }
+      this.saveInventory();
     }
 
     this.saveBookings();
@@ -1524,7 +1566,10 @@ class LotteryDatabaseService {
     }
 
     const bookingIndex = this.inMemoryBookings.findIndex(
-      (b) => b.ticketNumber === ticketNumber && b.date === date && b.bookingStatus === 'Booked'
+      (b) =>
+        b.ticketNumber === ticketNumber &&
+        b.date === date &&
+        (b.bookingStatus === 'Booked' || b.bookingStatus === 'Pending Confirmation')
     );
 
     if (bookingIndex === -1) {
@@ -1543,6 +1588,7 @@ class LotteryDatabaseService {
     const newAmountPaid = booking.amountPaid + paymentAmount;
     const newRemaining = Math.max(0, booking.totalAmount - newAmountPaid);
     const newPaymentStatus = newRemaining === 0 ? 'Paid' : 'Partial';
+    const newBookingStatus = newRemaining === 0 ? 'Booked' : booking.bookingStatus;
 
     const auditEntry: PaymentAuditEntry = {
       id: `pay-aud-${Date.now()}`,
@@ -1561,6 +1607,7 @@ class LotteryDatabaseService {
       amountPaid: newAmountPaid,
       remainingBalance: newRemaining,
       paymentStatus: newPaymentStatus,
+      bookingStatus: newBookingStatus,
       paymentRef: paymentRef || booking.paymentRef || `REC-${Date.now()}`,
       paidBy: booking.customerName,
       paidAt: nowStr,
@@ -1568,6 +1615,16 @@ class LotteryDatabaseService {
     };
 
     this.inMemoryBookings[bookingIndex] = updatedBooking;
+
+    if (newBookingStatus === 'Booked') {
+      for (const inv of this.inMemoryInventory.values()) {
+        if (inv.ticketNumber === ticketNumber && inv.drawDate === date) {
+          inv.bookingStatus = 'Booked';
+          inv.bookedTicketId = booking.id;
+        }
+      }
+      this.saveInventory();
+    }
     this.saveBookings();
     this.broadcastUpdate();
 
@@ -1585,7 +1642,10 @@ class LotteryDatabaseService {
     reason: string
   ): { success: boolean; error?: string } {
     const bookingIndex = this.inMemoryBookings.findIndex(
-      (b) => b.ticketNumber === ticketNumber && b.date === date && b.bookingStatus === 'Booked'
+      (b) =>
+        b.ticketNumber === ticketNumber &&
+        b.date === date &&
+        (b.bookingStatus === 'Booked' || b.bookingStatus === 'Pending Confirmation')
     );
 
     if (bookingIndex === -1) {
@@ -1627,6 +1687,15 @@ class LotteryDatabaseService {
 
     this.inMemoryBookings[bookingIndex] = updatedBooking;
     this.inMemoryLocks.delete(this.getLockKey(date, ticketNumber));
+
+    // Revert inventory item back to Available
+    for (const inv of this.inMemoryInventory.values()) {
+      if (inv.ticketNumber === ticketNumber && inv.drawDate === date) {
+        inv.bookingStatus = 'Available';
+        inv.bookedTicketId = undefined;
+      }
+    }
+    this.saveInventory();
     this.saveBookings();
     this.saveLocks();
     this.broadcastUpdate();
@@ -1660,6 +1729,41 @@ class LotteryDatabaseService {
     };
 
     this.inMemoryWinners = [newRecord, ...this.inMemoryWinners];
+    this.saveWinners();
+    this.broadcastUpdate();
+    return { success: true };
+  }
+
+  public updateWinnerAmount(
+    winnerId: string,
+    winningAmount: number,
+    role: LoginType
+  ): { success: boolean; error?: string } {
+    if (role !== 'admin') {
+      return { success: false, error: 'Permission Denied: Only Admin can update winner amounts.' };
+    }
+    const idx = this.inMemoryWinners.findIndex((w) => w.id === winnerId);
+    if (idx === -1) {
+      return { success: false, error: 'Winner record not found.' };
+    }
+    this.inMemoryWinners[idx] = {
+      ...this.inMemoryWinners[idx],
+      winningAmount,
+      prizeAmount: winningAmount,
+    };
+    this.saveWinners();
+    this.broadcastUpdate();
+    return { success: true };
+  }
+
+  public deleteWinnerRecord(
+    winnerId: string,
+    role: LoginType
+  ): { success: boolean; error?: string } {
+    if (role !== 'admin') {
+      return { success: false, error: 'Permission Denied: Only Admin can delete winners.' };
+    }
+    this.inMemoryWinners = this.inMemoryWinners.filter((w) => w.id !== winnerId);
     this.saveWinners();
     this.broadcastUpdate();
     return { success: true };
@@ -1735,15 +1839,15 @@ class LotteryDatabaseService {
       if (!num || seen.has(num)) continue;
       seen.add(num);
 
-      if (this.isTicketBooked(num, d)) {
-        skipped.push({ ticketNumber: num, reason: 'ALREADY_BOOKED' });
+      if (this.isTicketBooked(num, d) || this.isTicketPending(num, d) || this.isTicketLocked(num, d)) {
+        skipped.push({ ticketNumber: num, reason: 'ALREADY_ACTIVE' });
         continue;
       }
 
       const invKey = `${d}_${sId}_${num}`;
       const existing = this.inMemoryInventory.get(invKey);
-      if (existing && existing.bookingStatus === 'Booked') {
-        skipped.push({ ticketNumber: num, reason: 'ALREADY_BOOKED' });
+      if (existing && (existing.bookingStatus === 'Booked' || existing.bookingStatus === 'Pending Confirmation')) {
+        skipped.push({ ticketNumber: num, reason: 'ALREADY_ACTIVE' });
         continue;
       }
 
@@ -1817,6 +1921,143 @@ class LotteryDatabaseService {
     this.saveAppearance();
     this.broadcastUpdate();
     return { success: true, config: this.inMemoryAppearance };
+  }
+
+  public schedulePublication(params: {
+    drawDate: string;
+    seriesId: string;
+    seriesTitle: string;
+    tickets: string[];
+    scheduledForMs: number;
+    scheduledForIso?: string;
+    scheduledForDisplay?: string;
+    timezone?: string;
+    createdBy?: string;
+    createdByUid?: string;
+  }): { success: boolean; schedule: ScheduledPublication } {
+    const id = `sched_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const nowIso = new Date().toISOString();
+    const schedule: ScheduledPublication = {
+      id,
+      drawDate: params.drawDate,
+      seriesId: params.seriesId || 'default',
+      seriesTitle: params.seriesTitle || this.inMemoryConfig.seriesTitle || 'CUSTOM NAME',
+      tickets: params.tickets.map((t) => String(t).padStart(4, '0')),
+      ticketCount: params.tickets.length,
+      scheduledForMs: params.scheduledForMs,
+      scheduledForIso: params.scheduledForIso || new Date(params.scheduledForMs).toISOString(),
+      scheduledForDisplay: params.scheduledForDisplay || new Date(params.scheduledForMs).toLocaleString(),
+      timezone: params.timezone || 'Asia/Kolkata',
+      status: 'SCHEDULED',
+      createdAt: nowIso,
+      createdBy: params.createdBy || 'Admin',
+      createdByUid: params.createdByUid || 'admin_uid',
+    };
+
+    this.inMemorySchedules.set(id, schedule);
+    this.saveSchedules();
+    this.broadcastUpdate();
+    return { success: true, schedule };
+  }
+
+  public cancelScheduledPublication(id: string): { success: boolean; error?: string } {
+    const existing = this.inMemorySchedules.get(id);
+    if (!existing) return { success: false, error: 'Scheduled publication not found.' };
+    if (existing.status === 'PUBLISHED') return { success: false, error: 'Cannot cancel an already published schedule.' };
+    existing.status = 'CANCELLED';
+    existing.cancelledAt = new Date().toISOString();
+    this.inMemorySchedules.set(id, existing);
+    this.saveSchedules();
+    this.broadcastUpdate();
+    return { success: true };
+  }
+
+  public updateScheduledPublication(
+    id: string,
+    params: {
+      tickets?: string[];
+      scheduledForMs?: number;
+      scheduledForIso?: string;
+      scheduledForDisplay?: string;
+    }
+  ): { success: boolean; schedule?: ScheduledPublication; error?: string } {
+    const existing = this.inMemorySchedules.get(id);
+    if (!existing) return { success: false, error: 'Scheduled publication not found.' };
+    if (existing.status !== 'SCHEDULED') return { success: false, error: 'Can only edit pending scheduled collections.' };
+
+    if (params.tickets && params.tickets.length > 0) {
+      existing.tickets = params.tickets.map((t) => String(t).padStart(4, '0'));
+      existing.ticketCount = existing.tickets.length;
+    }
+    if (params.scheduledForMs) {
+      existing.scheduledForMs = params.scheduledForMs;
+      existing.scheduledForIso = params.scheduledForIso || new Date(params.scheduledForMs).toISOString();
+      existing.scheduledForDisplay = params.scheduledForDisplay || new Date(params.scheduledForMs).toLocaleString();
+    }
+    existing.updatedAt = new Date().toISOString();
+    this.inMemorySchedules.set(id, existing);
+    this.saveSchedules();
+    this.broadcastUpdate();
+    return { success: true, schedule: existing };
+  }
+
+  public getScheduledPublications(): ScheduledPublication[] {
+    this.processScheduledPublications();
+    return Array.from(this.inMemorySchedules.values()).sort(
+      (a, b) => Number(a.scheduledForMs || 0) - Number(b.scheduledForMs || 0)
+    );
+  }
+
+  public processScheduledPublications(): { success: boolean; processedCount: number; publishedCount: number } {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    let processedCount = 0;
+    let publishedCount = 0;
+
+    for (const [id, sched] of this.inMemorySchedules.entries()) {
+      if (sched.status === 'SCHEDULED' && sched.scheduledForMs <= now) {
+        processedCount++;
+        try {
+          const res = this.addTicketInventory(
+            sched.tickets,
+            sched.drawDate,
+            sched.seriesId,
+            sched.seriesTitle,
+            'PUBLISHED',
+            { id: sched.createdByUid || 'system', name: sched.createdBy || 'Scheduled Publisher', role: 'admin' }
+          );
+          sched.status = 'PUBLISHED';
+          sched.publishedAtIso = nowIso;
+          sched.publishedCount = res.added.length;
+          sched.skippedCount = res.skipped.length;
+          publishedCount += res.added.length;
+          this.inMemorySchedules.set(id, sched);
+        } catch (err: any) {
+          sched.status = 'FAILED';
+          sched.failedAtIso = nowIso;
+          sched.error = err?.message || String(err);
+          this.inMemorySchedules.set(id, sched);
+        }
+      }
+    }
+
+    if (processedCount > 0) {
+      this.saveSchedules();
+      this.broadcastUpdate();
+    }
+
+    return { success: true, processedCount, publishedCount };
+  }
+
+  private saveSchedules() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(
+          STORAGE_KEYS.SCHEDULES,
+          JSON.stringify(Array.from(this.inMemorySchedules.values()))
+        );
+      }
+    } catch {}
   }
 
   public getWeeklyPresets(): WeeklyTicketPresetsConfig {

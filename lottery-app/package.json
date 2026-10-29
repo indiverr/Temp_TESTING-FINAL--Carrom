@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:otp": "node ../test/otpIntegrationTests.cjs",
+    "test:ux": "node ../test/ticketGridBookingUxTests.cjs",
     "cap:sync": "cap sync android",
     "cap:open": "cap open android"
   },
