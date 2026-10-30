@@ -159,7 +159,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       );
 
       if (!res.success || !res.user) {
-        setErrorMessage(res.error || 'Authentication failed.');
+        const rawErr = res.error || 'Authentication failed.';
+        const cleanErr = rawErr.includes('Upstream network request failed')
+          ? 'Unable to connect to authentication server. Please check your credentials or network connection.'
+          : rawErr;
+        setErrorMessage(cleanErr);
         return;
       }
 

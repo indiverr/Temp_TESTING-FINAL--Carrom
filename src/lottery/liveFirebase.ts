@@ -2202,7 +2202,7 @@ class LiveFirebaseService {
       }
       let signedInUser!: User;
       let resolvedName = trimmedId.includes('@') ? trimmedId.split('@')[0] : trimmedId;
-      let serverResolvedRole: LoginType = 'employee';
+      let serverResolvedRole: LoginType = selectedRole;
       const scriptUrl = getOtpAppsScriptUrl();
 
       let claimsRefreshedOnServer = false;
@@ -2210,30 +2210,38 @@ class LiveFirebaseService {
         const cred = await signInWithEmailAndPassword(auth, trimmedId, password);
         signedInUser = cred.user;
       } else {
-        // Server-side or client-cached username-to-account resolution
+        // Authoritative username directory for production Carrom Lottery Desk accounts in carrom-df56a
+        const AUTHORITATIVE_USERS: Record<string, { email: string; role: LoginType; name: string }> = {
+          sasikaran: { email: 'carromlotterydesk@gmail.com', role: 'admin', name: 'Sasikaran' },
+          sasik: { email: 'sasik@gmail.com', role: 'paid_employee', name: 'sasik' },
+          kannan: { email: 'kannatest@gmail.com', role: 'employee', name: 'kanna' },
+          harik: { email: 'kannantest2@gmail.com', role: 'paid_employee', name: 'harik' },
+          hari: { email: 'haricnp9@gmail.com', role: 'employee', name: 'hari' },
+          hari2: { email: 'kannan111@gmail.com', role: 'employee', name: 'hari2' },
+          hari3: { email: 'hari222@gmail.com', role: 'employee', name: 'hari3' },
+          kaannan: { email: 'kaannan@gmail.com', role: 'paid_employee', name: 'Kanna' },
+        };
+
+        const normId = trimmedId.toLowerCase();
         let authEmail = '';
         let authDisplayName = '';
         let authRole: LoginType | undefined;
-        let claimsRefreshed = false;
 
-        // 1. Primary administrative alias: sasikaran -> carromlotterydesk@gmail.com
-        if (trimmedId.toLowerCase() === 'sasikaran') {
-          authEmail = 'carromlotterydesk@gmail.com';
-          authDisplayName = 'Sasikaran';
-          authRole = 'admin';
-        }
-
-        // 2. Check local client cache for previously verified username -> email mapping
-        if (!authEmail && typeof window !== 'undefined' && window.localStorage) {
+        if (AUTHORITATIVE_USERS[normId]) {
+          authEmail = AUTHORITATIVE_USERS[normId].email;
+          authDisplayName = AUTHORITATIVE_USERS[normId].name;
+          authRole = AUTHORITATIVE_USERS[normId].role;
+        } else if (typeof window !== 'undefined' && window.localStorage) {
+          // Check local client cache for an employee who registered via this browser
           try {
-            const cached = localStorage.getItem('carrom_user_email_' + trimmedId.toLowerCase());
+            const cached = localStorage.getItem('carrom_user_email_' + normId);
             if (cached && cached.includes('@')) {
               authEmail = cached;
             }
           } catch {}
         }
 
-        // 3. If Apps Script is configured, attempt authoritative server resolution
+        // If not in static directory or cache, check if Apps Script backend can authoritatively resolve newly created usernames
         if (!authEmail && scriptUrl) {
           try {
             const authData = await this.callOtpAppsScript({
@@ -2241,19 +2249,12 @@ class LiveFirebaseService {
               username: trimmedId,
               password,
             });
-
             if (authData?.success && authData?.email) {
               authEmail = authData.email;
               authDisplayName = authData.displayName || resolvedName;
               authRole = (authData.role as LoginType) || 'employee';
-              claimsRefreshed = Boolean(authData.claimsRefreshed);
-              if (typeof window !== 'undefined' && window.localStorage) {
-                try {
-                  localStorage.setItem('carrom_user_email_' + trimmedId.toLowerCase(), authEmail);
-                } catch {}
-              }
-            } else if (authData?.error) {
-              // If it's an explicit invalid credentials error, fail fast with authoritative message
+              claimsRefreshedOnServer = Boolean(authData.claimsRefreshed);
+            } else if (authData?.error && !authData.error.includes('Upstream network request failed')) {
               if (
                 authData.error === 'Invalid username or password.' ||
                 authData.error.includes('Too many failed') ||
@@ -2264,75 +2265,29 @@ class LiveFirebaseService {
                   error: authData.error,
                 };
               }
-              // If it's an upstream network error (e.g. Apps Script quota/timeout), continue to direct Firebase Auth fallback below
             }
-          } catch (e: any) {
-            console.warn('[Auth] Apps Script username lookup failed, falling back:', e?.message);
+          } catch {
+            // Apps Script unavailable or network failure; continue to direct Firebase candidate
           }
         }
 
-        // 4. Direct Firebase Auth fallback when username could not be resolved via server
         if (!authEmail) {
-          const candidateEmails = [
-            trimmedId.toLowerCase() === 'sasikaran' ? 'carromlotterydesk@gmail.com' : null,
-            trimmedId + '@gmail.com',
-          ].filter(Boolean) as string[];
+          return {
+            success: false,
+            error: 'Invalid username/email or password. If logging in with an employee account, you can also sign in directly using your registered email address.',
+          };
+        }
 
-          let signedIn = false;
-          let lastAuthError: any = null;
+        resolvedName = authDisplayName || resolvedName;
+        if (authRole) serverResolvedRole = authRole;
+        const cred = await signInWithEmailAndPassword(auth, authEmail, password);
+        signedInUser = cred.user;
 
-          for (const candEmail of candidateEmails) {
-            try {
-              const cred = await signInWithEmailAndPassword(auth, candEmail, password);
-              signedInUser = cred.user;
-              signedIn = true;
-              if (typeof window !== 'undefined' && window.localStorage) {
-                try {
-                  localStorage.setItem('carrom_user_email_' + trimmedId.toLowerCase(), candEmail);
-                } catch {}
-              }
-              break;
-            } catch (err: any) {
-              lastAuthError = err;
-              const errCode = err?.code || '';
-              if (errCode === 'auth/wrong-password') {
-                return { success: false, error: 'Invalid username/email or password.' };
-              }
-            }
-          }
-
-          if (!signedIn) {
-            if (isEmulatorMode() && functions) {
-              const authUserFn = httpsCallable(functions, 'authenticateUsername');
-              const fnRes: any = await authUserFn({ username: trimmedId, password });
-              if (fnRes.data?.customToken) {
-                resolvedName = fnRes.data.displayName || resolvedName;
-                serverResolvedRole = (fnRes.data.role as LoginType) || 'employee';
-                const cred = await signInWithCustomToken(auth, fnRes.data.customToken);
-                signedInUser = cred.user;
-                signedIn = true;
-              }
-            }
-          }
-
-          if (!signedIn) {
-            if (lastAuthError?.code === 'auth/network-request-failed') {
-              return {
-                success: false,
-                error: 'Network connection error: Unable to reach authentication server. Please check your internet connection.',
-              };
-            }
-            return {
-              success: false,
-              error: 'Invalid username/email or password. If logging in with an employee account, you can also sign in directly using your registered email address.',
-            };
-          }
-        } else {
-          resolvedName = authDisplayName || resolvedName;
-          if (authRole) serverResolvedRole = authRole;
-          claimsRefreshedOnServer = claimsRefreshed;
-          const cred = await signInWithEmailAndPassword(auth, authEmail, password);
-          signedInUser = cred.user;
+        // Remember verified username -> email mapping in localStorage after successful authentication
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            localStorage.setItem('carrom_user_email_' + normId, authEmail);
+          } catch {}
         }
       }
 
@@ -2447,7 +2402,8 @@ class LiveFirebaseService {
         code === 'auth/network-request-failed' ||
         err?.name === 'TypeError' ||
         err?.message?.includes('Failed to fetch') ||
-        err?.message?.includes('network request failed')
+        err?.message?.includes('network request failed') ||
+        err?.message?.includes('Upstream network')
       ) {
         return {
           success: false,
@@ -2474,9 +2430,13 @@ class LiveFirebaseService {
             'Firebase Web API key (VITE_FIREBASE_API_KEY) is invalid for project carrom-df56a. Update .env.local and restart the Vite server.',
         };
       }
+      const rawMsg = err?.message || 'Authentication failed.';
+      const cleanMsg = rawMsg.includes('Upstream network')
+        ? 'Unable to reach authentication server. Please check your network connection and try again.'
+        : rawMsg;
       return {
         success: false,
-        error: err?.message || 'Authentication failed.',
+        error: cleanMsg,
       };
     }
   }
