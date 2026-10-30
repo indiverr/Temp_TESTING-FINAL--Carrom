@@ -545,6 +545,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-slate-200 rounded-md focus:outline-none focus:border-slate-900 font-medium text-slate-800"
                     />
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    You can log in using your employee username or registered email address.
+                  </p>
                 </div>
 
                 <div>

@@ -194,16 +194,21 @@ function handleAuthenticateUsername_(body) {
   }
 
   var isDedicatedAdmin = (rawUsername === 'sasikaran');
-  var dirDoc = firestoreGetDocument_('userDirectory/' + encodeURIComponent(rawUsername));
+  var dirDoc = null;
+  if (!isDedicatedAdmin) {
+    try {
+      dirDoc = firestoreGetDocument_('userDirectory/' + encodeURIComponent(rawUsername));
+    } catch (e) {
+      // Continue to fallback lookup
+    }
+  }
   var email = dirDoc && dirDoc.email ? String(dirDoc.email) : '';
   var role = dirDoc && dirDoc.role ? normalizeRole_(dirDoc.role) : 'employee';
   var displayName = dirDoc && dirDoc.displayName ? String(dirDoc.displayName) : rawUsername;
   var resolvedUid = dirDoc && dirDoc.uid ? String(dirDoc.uid) : '';
 
   if (isDedicatedAdmin) {
-    if (!email) {
-      email = getAdminEmail_() || OTP_RECIPIENT_EMAIL || 'carromlotterydesk@gmail.com';
-    }
+    email = getAdminEmail_() || OTP_RECIPIENT_EMAIL || 'carromlotterydesk@gmail.com';
     role = 'admin';
     displayName = 'Sasikaran';
   }
@@ -3135,7 +3140,8 @@ function safeFetch_(url, options) {
   try {
     return UrlFetchApp.fetch(url, opts);
   } catch (err) {
-    throw new Error('Upstream network request failed.');
+    var errMsg = err && err.message ? String(err.message) : 'Request failed';
+    throw new Error('Upstream network request failed: ' + errMsg);
   }
 }
 

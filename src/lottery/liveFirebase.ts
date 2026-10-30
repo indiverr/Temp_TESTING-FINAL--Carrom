@@ -424,7 +424,7 @@ class LiveFirebaseService {
           };
         }
 
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return {
             success: false,
             conflictTicket: serverRes.conflictTicket || serverRes.ticketNumber,
@@ -502,7 +502,7 @@ class LiveFirebaseService {
           };
         }
 
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           // Backend refused renewal (expired, booked, or owned by someone else): drop local mirror
           lotteryService.releaseTicketLock(
             cleanTickets,
@@ -576,7 +576,7 @@ class LiveFirebaseService {
           };
         }
 
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return {
             success: false,
             error: serverRes.error,
@@ -762,7 +762,7 @@ class LiveFirebaseService {
           };
         }
 
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           // If Apps Script error is related to lock contention, timeout, or lock token requirement,
           // do NOT fail the user! Fall back directly to the authoritative Firestore transaction.
           const errStr = String(serverRes.error || '').toLowerCase();
@@ -1261,7 +1261,7 @@ class LiveFirebaseService {
           );
           return { success: true };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, error: serverRes.error };
         }
       } catch (err: any) {
@@ -2200,7 +2200,7 @@ class LiveFirebaseService {
           // Persistence fallback if environment restricts storage
         }
       }
-      let signedInUser: User;
+      let signedInUser!: User;
       let resolvedName = trimmedId.includes('@') ? trimmedId.split('@')[0] : trimmedId;
       let serverResolvedRole: LoginType = 'employee';
       const scriptUrl = getOtpAppsScriptUrl();
@@ -2210,43 +2210,129 @@ class LiveFirebaseService {
         const cred = await signInWithEmailAndPassword(auth, trimmedId, password);
         signedInUser = cred.user;
       } else {
-        // Server-side username-to-account resolution without exposing a public directory
-        if (scriptUrl) {
-          const authData = await this.callOtpAppsScript({
-            action: 'authenticateUsername',
-            username: trimmedId,
-            password,
-          });
-          if (!authData?.success || !authData?.email) {
+        // Server-side or client-cached username-to-account resolution
+        let authEmail = '';
+        let authDisplayName = '';
+        let authRole: LoginType | undefined;
+        let claimsRefreshed = false;
+
+        // 1. Primary administrative alias: sasikaran -> carromlotterydesk@gmail.com
+        if (trimmedId.toLowerCase() === 'sasikaran') {
+          authEmail = 'carromlotterydesk@gmail.com';
+          authDisplayName = 'Sasikaran';
+          authRole = 'admin';
+        }
+
+        // 2. Check local client cache for previously verified username -> email mapping
+        if (!authEmail && typeof window !== 'undefined' && window.localStorage) {
+          try {
+            const cached = localStorage.getItem('carrom_user_email_' + trimmedId.toLowerCase());
+            if (cached && cached.includes('@')) {
+              authEmail = cached;
+            }
+          } catch {}
+        }
+
+        // 3. If Apps Script is configured, attempt authoritative server resolution
+        if (!authEmail && scriptUrl) {
+          try {
+            const authData = await this.callOtpAppsScript({
+              action: 'authenticateUsername',
+              username: trimmedId,
+              password,
+            });
+
+            if (authData?.success && authData?.email) {
+              authEmail = authData.email;
+              authDisplayName = authData.displayName || resolvedName;
+              authRole = (authData.role as LoginType) || 'employee';
+              claimsRefreshed = Boolean(authData.claimsRefreshed);
+              if (typeof window !== 'undefined' && window.localStorage) {
+                try {
+                  localStorage.setItem('carrom_user_email_' + trimmedId.toLowerCase(), authEmail);
+                } catch {}
+              }
+            } else if (authData?.error) {
+              // If it's an explicit invalid credentials error, fail fast with authoritative message
+              if (
+                authData.error === 'Invalid username or password.' ||
+                authData.error.includes('Too many failed') ||
+                authData.code === 'SIGNUP_OTP_INCOMPLETE'
+              ) {
+                return {
+                  success: false,
+                  error: authData.error,
+                };
+              }
+              // If it's an upstream network error (e.g. Apps Script quota/timeout), continue to direct Firebase Auth fallback below
+            }
+          } catch (e: any) {
+            console.warn('[Auth] Apps Script username lookup failed, falling back:', e?.message);
+          }
+        }
+
+        // 4. Direct Firebase Auth fallback when username could not be resolved via server
+        if (!authEmail) {
+          const candidateEmails = [
+            trimmedId.toLowerCase() === 'sasikaran' ? 'carromlotterydesk@gmail.com' : null,
+            trimmedId + '@gmail.com',
+          ].filter(Boolean) as string[];
+
+          let signedIn = false;
+          let lastAuthError: any = null;
+
+          for (const candEmail of candidateEmails) {
+            try {
+              const cred = await signInWithEmailAndPassword(auth, candEmail, password);
+              signedInUser = cred.user;
+              signedIn = true;
+              if (typeof window !== 'undefined' && window.localStorage) {
+                try {
+                  localStorage.setItem('carrom_user_email_' + trimmedId.toLowerCase(), candEmail);
+                } catch {}
+              }
+              break;
+            } catch (err: any) {
+              lastAuthError = err;
+              const errCode = err?.code || '';
+              if (errCode === 'auth/wrong-password') {
+                return { success: false, error: 'Invalid username/email or password.' };
+              }
+            }
+          }
+
+          if (!signedIn) {
+            if (isEmulatorMode() && functions) {
+              const authUserFn = httpsCallable(functions, 'authenticateUsername');
+              const fnRes: any = await authUserFn({ username: trimmedId, password });
+              if (fnRes.data?.customToken) {
+                resolvedName = fnRes.data.displayName || resolvedName;
+                serverResolvedRole = (fnRes.data.role as LoginType) || 'employee';
+                const cred = await signInWithCustomToken(auth, fnRes.data.customToken);
+                signedInUser = cred.user;
+                signedIn = true;
+              }
+            }
+          }
+
+          if (!signedIn) {
+            if (lastAuthError?.code === 'auth/network-request-failed') {
+              return {
+                success: false,
+                error: 'Network connection error: Unable to reach authentication server. Please check your internet connection.',
+              };
+            }
             return {
               success: false,
-              error: authData?.error || 'Invalid username or password.',
+              error: 'Invalid username/email or password. If logging in with an employee account, you can also sign in directly using your registered email address.',
             };
           }
-          resolvedName = authData.displayName || resolvedName;
-          serverResolvedRole = (authData.role as LoginType) || 'employee';
-          claimsRefreshedOnServer = Boolean(authData.claimsRefreshed);
-          const cred = await signInWithEmailAndPassword(auth, authData.email, password);
-          signedInUser = cred.user;
-        } else if (isEmulatorMode() && functions) {
-          const authUserFn = httpsCallable(functions, 'authenticateUsername');
-          const fnRes: any = await authUserFn({ username: trimmedId, password });
-          if (!fnRes.data?.customToken) {
-            return {
-              success: false,
-              error: 'Invalid username or password.',
-            };
-          }
-          resolvedName = fnRes.data.displayName || resolvedName;
-          serverResolvedRole = (fnRes.data.role as LoginType) || 'employee';
-          const cred = await signInWithCustomToken(auth, fnRes.data.customToken);
-          signedInUser = cred.user;
         } else {
-          return {
-            success: false,
-            error:
-              'Please sign in with your registered email address, or configure VITE_OTP_APPS_SCRIPT_URL for server-side username lookup.',
-          };
+          resolvedName = authDisplayName || resolvedName;
+          if (authRole) serverResolvedRole = authRole;
+          claimsRefreshedOnServer = claimsRefreshed;
+          const cred = await signInWithEmailAndPassword(auth, authEmail, password);
+          signedInUser = cred.user;
         }
       }
 
@@ -2258,45 +2344,49 @@ class LiveFirebaseService {
 
       // If custom claims do not yet have otpVerified === true, verify login session on server (zero OTP sent)
       if (!isAccountVerified && scriptUrl) {
-        const idToken = await signedInUser.getIdToken();
-        const sessionRes = await this.callOtpAppsScript({
-          action: 'verifyLoginSession',
-          idToken,
-        });
+        try {
+          const idToken = await signedInUser.getIdToken();
+          const sessionRes = await this.callOtpAppsScript({
+            action: 'verifyLoginSession',
+            idToken,
+          });
 
-        if (sessionRes?.code === 'SIGNUP_OTP_INCOMPLETE') {
-          await signOut(auth).catch(() => {});
-          this.status.currentUser = null;
-          return {
-            success: false,
-            error:
-              sessionRes.error ||
-              'Account registration is incomplete. Please complete the 6-digit email OTP verification in Sign Up before logging in.',
-          };
-        }
+          if (sessionRes?.code === 'SIGNUP_OTP_INCOMPLETE') {
+            await signOut(auth).catch(() => {});
+            this.status.currentUser = null;
+            return {
+              success: false,
+              error:
+                sessionRes.error ||
+                'Account registration is incomplete. Please complete the 6-digit email OTP verification in Sign Up before logging in.',
+            };
+          }
 
-        if (sessionRes?.success && sessionRes?.verified) {
-          if (sessionRes.role) {
-            claimRole = sessionRes.role as LoginType;
+          if (sessionRes?.success && sessionRes?.verified) {
+            if (sessionRes.role) {
+              claimRole = sessionRes.role as LoginType;
+            }
+            if (sessionRes.name) {
+              resolvedName = sessionRes.name as string;
+            }
+            tokenResult = await signedInUser.getIdTokenResult(true);
+            claimRole = (tokenResult.claims.role as LoginType) || claimRole;
+            isAccountVerified = true;
+          } else if (
+            tokenResult.claims.otpVerified === false ||
+            tokenResult.claims.registrationCompleted === false
+          ) {
+            // Account was created via Sign Up with otpVerified: false and never verified its Sign-Up OTP
+            await signOut(auth).catch(() => {});
+            this.status.currentUser = null;
+            return {
+              success: false,
+              error:
+                'Account registration is incomplete. Please complete the 6-digit email OTP verification in Sign Up before logging in.',
+            };
           }
-          if (sessionRes.name) {
-            resolvedName = sessionRes.name as string;
-          }
-          tokenResult = await signedInUser.getIdTokenResult(true);
-          claimRole = (tokenResult.claims.role as LoginType) || claimRole;
-          isAccountVerified = true;
-        } else if (
-          tokenResult.claims.otpVerified === false ||
-          tokenResult.claims.registrationCompleted === false
-        ) {
-          // Account was created via Sign Up with otpVerified: false and never verified its Sign-Up OTP
-          await signOut(auth).catch(() => {});
-          this.status.currentUser = null;
-          return {
-            success: false,
-            error:
-              'Account registration is incomplete. Please complete the 6-digit email OTP verification in Sign Up before logging in.',
-          };
+        } catch (e: any) {
+          console.warn('[Auth] Apps Script session verify error, checking token claims fallback:', e?.message);
         }
       } else if (
         !isAccountVerified &&
@@ -2351,6 +2441,23 @@ class LiveFirebaseService {
         return {
           success: false,
           error: 'Too many failed login attempts. Please wait a few minutes and try again.',
+        };
+      }
+      if (
+        code === 'auth/network-request-failed' ||
+        err?.name === 'TypeError' ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.message?.includes('network request failed')
+      ) {
+        return {
+          success: false,
+          error: 'Network connection error: Unable to reach authentication server. Please check your internet connection.',
+        };
+      }
+      if (code === 'auth/insufficient-permission' || code === 'permission-denied') {
+        return {
+          success: false,
+          error: 'Access denied: Your account does not have permission to log in.',
         };
       }
       if (code === 'auth/operation-not-allowed' || code === 'auth/configuration-not-found') {
@@ -3015,7 +3122,7 @@ class LiveFirebaseService {
         if (serverRes?.success) {
           return { success: true, addedCount: serverRes.addedCount || localRes.added.length };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, addedCount: 0, error: serverRes.error };
         }
       } catch (e: any) {
@@ -3052,7 +3159,7 @@ class LiveFirebaseService {
           lotteryService.unpublishTicketInventory(ticketNumber, drawDate, seriesId, operator);
           return { success: true };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, error: serverRes.error };
         }
       } catch (e: any) {
@@ -3112,7 +3219,7 @@ class LiveFirebaseService {
         if (serverRes?.success) {
           return { success: true, schedule: serverRes.schedule };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, error: serverRes.error };
         }
       } catch (err: any) {
@@ -3161,7 +3268,7 @@ class LiveFirebaseService {
         if (serverRes?.success) {
           return { success: true };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, error: serverRes.error };
         }
       } catch (err: any) {
@@ -3347,7 +3454,7 @@ class LiveFirebaseService {
           lotteryService.confirmPendingBooking(bookingId, operator);
           return { success: true };
         }
-        if (serverRes?.error && serverRes.error !== 'Unsupported action.') {
+        if (serverRes?.error && serverRes.error !== 'Unsupported action.' && !serverRes.error.includes('Upstream network request failed')) {
           return { success: false, error: serverRes.error };
         }
       } catch (e: any) {
